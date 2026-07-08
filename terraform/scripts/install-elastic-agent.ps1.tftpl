@@ -1,0 +1,19 @@
+$ErrorActionPreference = "Stop"
+
+$version = "${elastic_version}"
+$fleetUrl = "${fleet_url}"
+$enrollmentToken = "${enrollment_token}"
+
+$dest = "C:\ElasticAgent"
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+
+$zip = "$dest\elastic-agent.zip"
+$uri = "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$version-windows-x86_64.zip"
+
+Invoke-WebRequest -Uri $uri -OutFile $zip -UseBasicParsing
+Expand-Archive -Path $zip -DestinationPath $dest -Force
+
+$agentDir = (Get-ChildItem -Path $dest -Directory -Filter "elastic-agent-*" | Select-Object -First 1).FullName
+Set-Location $agentDir
+
+& .\elastic-agent.exe install --url="$fleetUrl" --enrollment-token="$enrollmentToken" --non-interactive --force

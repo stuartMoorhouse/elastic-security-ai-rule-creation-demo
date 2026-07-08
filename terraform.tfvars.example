@@ -1,0 +1,37 @@
+# Azure region for the Windows VM
+region = "westeurope"
+
+# Resource name prefix (Azure resource group/VNet/VM names and the Elastic
+# Cloud deployment name)
+prefix = "elastic-sec-demo"
+
+# Public IP (CIDR, e.g. "203.0.113.5/32") allowed to RDP into the Windows VM.
+# REQUIRED - the NSG denies RDP from every other source.
+my_ip = "0.0.0.0/32"
+
+# --- Optional overrides (defaults shown; uncomment to change) ---
+
+# Elastic Cloud region - independent of the Azure VM `region` above
+# ec_region = "gcp-europe-west1"
+
+# Elastic Cloud deployment template
+# ec_deployment_template_id = "gcp-storage-optimized"
+
+# Elasticsearch hot tier
+# elasticsearch_size       = "4g"
+# elasticsearch_zone_count = 1
+
+# Kibana
+# kibana_size       = "1g"
+# kibana_zone_count = 1
+
+# Azure VM
+# vm_size           = "Standard_B2s"
+# vm_admin_username = "demoadmin"
+
+# --- NOT set via tfvars - read from the environment by the providers ---
+# EC_API_KEY          Elastic Cloud API key (elastic/ec provider)
+# ARM_CLIENT_ID       Azure service principal auth (hashicorp/azurerm provider)
+# ARM_CLIENT_SECRET
+# ARM_SUBSCRIPTION_ID
+# ARM_TENANT_ID

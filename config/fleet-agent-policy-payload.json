@@ -1,0 +1,11 @@
+{
+  "name": "elastic-security-webinar-demo-policy",
+  "description": "Fleet agent policy for the Elastic Security 9.4 webinar demo Windows VM (ClickFix/LOLBin simulation host).",
+  "namespace": "default",
+  "monitoring_enabled": [
+    "logs",
+    "metrics"
+  ],
+  "inactivity_timeout": 1209600,
+  "is_protected": false
+}
