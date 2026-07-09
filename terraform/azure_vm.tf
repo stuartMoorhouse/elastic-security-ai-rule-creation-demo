@@ -14,11 +14,13 @@ resource "random_password" "vm_admin" {
 
 resource "azurerm_windows_virtual_machine" "main" {
   name                = "${var.prefix}-vm"
+  computer_name       = "secdemo-vm" # Windows computer_name is capped at 15 chars
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
   size                = var.vm_size
   admin_username      = var.vm_admin_username
   admin_password      = random_password.vm_admin.result
+  tags                = local.tags
 
   network_interface_ids = [azurerm_network_interface.main.id]
 
@@ -40,11 +42,17 @@ locals {
   # into the CustomScriptExtension's commandToExecute (via -EncodedCommand),
   # so keeping it well under 16KB avoids any risk of hitting Windows/Azure
   # command-length limits.
-  install_script_rendered = templatefile("${path.module}/scripts/install-elastic-agent.ps1.tftpl", {
-    elastic_version  = data.ec_stack.latest.version
-    fleet_url        = local.fleet_url
-    enrollment_token = local.enrollment_token
-  })
+  #
+  # OpenSSH setup is appended rather than run as a second extension —
+  # Windows VMs only support one CustomScriptExtension per handler.
+  install_script_rendered = join("\n", [
+    templatefile("${path.module}/scripts/install-elastic-agent.ps1.tftpl", {
+      elastic_version  = data.ec_stack.latest.version
+      fleet_url        = local.fleet_url
+      enrollment_token = local.enrollment_token
+    }),
+    file("${path.module}/scripts/install-openssh.ps1"),
+  ])
 
   # PowerShell's -EncodedCommand expects Base64 of UTF-16LE, not UTF-8 —
   # textencodebase64's second argument handles that directly, so no manual

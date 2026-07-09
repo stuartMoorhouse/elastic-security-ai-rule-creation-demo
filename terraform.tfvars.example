@@ -5,9 +5,12 @@ region = "westeurope"
 # Cloud deployment name)
 prefix = "elastic-sec-demo"
 
-# Public IP (CIDR, e.g. "203.0.113.5/32") allowed to RDP into the Windows VM.
-# REQUIRED - the NSG denies RDP from every other source.
-my_ip = "0.0.0.0/32"
+# Public IP (CIDR, e.g. "203.0.113.5/32") allowed to RDP/SSH into the Windows
+# VM. Optional - leave unset (or "") to auto-detect the IP of the machine
+# running `terraform apply` via ifconfig.me. Pin it explicitly if that IP
+# changes often (e.g. a VPN) and you don't want every apply to shift the
+# allowed source.
+# my_ip = "0.0.0.0/32"
 
 # --- Optional overrides (defaults shown; uncomment to change) ---
 

@@ -1,9 +1,23 @@
 # Azure networking for the Windows VM: resource group, VNet, subnet, public
-# IP, and an NSG that allows RDP only from var.my_ip.
+# IP, and an NSG that allows RDP and SSH only from local.my_ip (see my_ip.tf).
+
+locals {
+  # Required by subscription policy on every resource group (and applied
+  # consistently to child resources) — see graphql-otel/terraform/main.tf
+  # for the same convention.
+  tags = {
+    division   = "field"
+    org        = "sa"
+    team       = "emea-north"
+    project    = "stuartmoorhouse"
+    keep-until = "2026-07-22"
+  }
+}
 
 resource "azurerm_resource_group" "main" {
   name     = "${var.prefix}-rg"
   location = var.region
+  tags     = local.tags
 }
 
 resource "azurerm_virtual_network" "main" {
@@ -11,6 +25,7 @@ resource "azurerm_virtual_network" "main" {
   address_space       = ["10.20.0.0/16"]
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
+  tags                = local.tags
 }
 
 resource "azurerm_subnet" "main" {
@@ -26,12 +41,14 @@ resource "azurerm_public_ip" "main" {
   resource_group_name = azurerm_resource_group.main.name
   allocation_method   = "Static"
   sku                 = "Standard"
+  tags                = local.tags
 }
 
 resource "azurerm_network_security_group" "main" {
   name                = "${var.prefix}-nsg"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
+  tags                = local.tags
 
   security_rule {
     name                       = "AllowRDPFromMyIP"
@@ -41,7 +58,19 @@ resource "azurerm_network_security_group" "main" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "3389"
-    source_address_prefix      = var.my_ip
+    source_address_prefix      = local.my_ip
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "AllowSSHFromMyIP"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = local.my_ip
     destination_address_prefix = "*"
   }
 
@@ -64,6 +93,7 @@ resource "azurerm_network_interface" "main" {
   name                = "${var.prefix}-nic"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
+  tags                = local.tags
 
   ip_configuration {
     name                          = "internal"

@@ -11,8 +11,9 @@ variable "prefix" {
 }
 
 variable "my_ip" {
-  description = "Public IP (CIDR) allowed to RDP into the Windows VM"
+  description = "Public IP (CIDR) allowed to RDP/SSH into the Windows VM. Leave unset (empty string) to auto-detect the IP of the machine running `terraform apply` via ifconfig.me."
   type        = string
+  default     = ""
 }
 
 # --- Elastic Cloud (ECH) ---

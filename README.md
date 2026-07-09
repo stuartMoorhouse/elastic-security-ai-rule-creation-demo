@@ -20,8 +20,7 @@ MITRE: T1218.005 (Mshta), T1059.001 (PowerShell), T1059.003 (cmd), T1547 (persis
 
 ## Prerequisites
 
-- Infra provisioned (see `CLAUDE.md`): Azure Windows VM + Elastic Cloud, agent enrolled.
-- Elastic Defend installed on the VM (manual — via Kibana Fleet).
+- Infra provisioned (see `CLAUDE.md`): Azure Windows VM + Elastic Cloud, agent enrolled, Elastic Defend installed on the agent policy in detect-only mode (Terraform-managed).
 - `demo/remediate.ps1` uploaded to the Script library (*Remediation Action*).
 
 ## Demo steps
