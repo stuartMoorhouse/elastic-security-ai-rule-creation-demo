@@ -23,10 +23,43 @@ MITRE: T1218.005 (Mshta), T1059.001 (PowerShell), T1059.003 (cmd), T1547 (persis
 - Infra provisioned (see `CLAUDE.md`): Azure Windows VM + Elastic Cloud, agent enrolled, Elastic Defend installed on the agent policy in detect-only mode (Terraform-managed).
 - `demo/remediate.ps1` uploaded to the Script library (*Remediation Action*).
 
+## Connecting to the VM
+
+The VM enrollment script installs OpenSSH Server, so the simplest way to copy over and run `simulate-lolbin-chain.ps1` is SSH/SCP from your machine — no RDP client needed. (RDP is also open on 3389 from `my_ip` if you want the GUI, e.g. to watch Elastic Defend or the demo running live.)
+
+Grab connection details from Terraform outputs:
+
+```bash
+export VM_IP=$(terraform -chdir=terraform output -raw vm_public_ip)
+export VM_USER=$(terraform -chdir=terraform output -raw vm_admin_username)
+terraform -chdir=terraform output -raw vm_admin_password   # prints the admin password
+```
+
+Copy the simulation script to the VM (lands in the admin user's home directory):
+
+```bash
+scp demo/simulate-lolbin-chain.ps1 "${VM_USER}@${VM_IP}:"
+```
+
+SSH in (enter the password from above when prompted):
+
+```bash
+ssh "${VM_USER}@${VM_IP}"
+```
+
+RDP instead, if preferred:
+
+```bash
+open "rdp://full%20address=s:${VM_IP}&username=s:${VM_USER}"   # macOS, Microsoft Remote Desktop app
+```
+
 ## Demo steps
 
 1. **Author (AI detection).** Create a rule → **AI rule creation**. Prompt: *"Detect a ClickFix-style attack where a command from the Run dialog or mshta spawns PowerShell or curl to download a payload."* Refine, review the MITRE mapping, **Apply to creation**, enable.
-2. **Trigger.** On the VM, run `demo/simulate-lolbin-chain.ps1`.
+2. **Trigger.** Run the simulation on the VM over SSH (no interactive session needed):
+   ```bash
+   ssh "${VM_USER}@${VM_IP}" powershell -ExecutionPolicy Bypass -File simulate-lolbin-chain.ps1
+   ```
 3. **Detect.** Show the alert(s) — your AI rule plus the prebuilt *Suspicious Microsoft HTML Application Child Process*. Walk the process tree in the analyzer.
 4. **Respond (Runscript).** From the alert, run `runscript --script="remediate.ps1"`. Show output and script provenance in the Script library.
 5. **Automate (Workflows).** Show the alert-triggered Workflow: create case → attach alerts → AI analysis comment → isolate host → Slack notify. Open the auto-created case.
