@@ -15,8 +15,7 @@ MITRE: T1110.003 (Brute Force: Password Guessing / Spraying).
 | Agenda item | Feature |
 |---|---|
 | AI-assisted detection engineering | **AI rule creation** in Agent Builder — describe the threat in natural language, generate/refine an ES\|QL aggregation rule |
-| Automated response | **Runscript** response action + centralized **Script library** (Elastic Defend, GA 9.4) — blocks the alert's `source.ip` |
-| Automated case management | **Workflows** with Cases action steps, launched from an alert |
+| Automated response & case management | **Workflows**, launched from an alert, combining a **Runscript** response action + centralized **Script library** (Elastic Defend, GA 9.4) to block the `source.ip` and disable accounts, with **Cases** action steps to triage and document the incident |
 
 ## Prerequisites
 
@@ -52,8 +51,7 @@ open "rdp://full%20address=s:${VM_IP}&username=s:${VM_USER}"   # macOS, Microsof
 1. **Seed data.** Run `./demo/seed-password-spray-data.sh` (reads endpoint/credentials from `shared/env.json`, deletes any previous take's events, then bulk-loads fresh ones with timestamps relative to now) — no VM access needed for this step. `demo/create-sample-data.http` does the same thing request-by-request if you'd rather trigger it from an HTTP client instead. Seeding *before* authoring the rule means the next step's rule preview has live data to validate against, not an empty result set.
 2. **Author (AI detection).** Create a rule → **AI rule creation**. Prompt: *"Over authentication logs, detect password spraying: a single source IP that fails authentication against many distinct user accounts. Group by source.ip, count the total failed attempts and the number of distinct usernames targeted, and alert when one IP has failed logins against 5 or more distinct users with at least 10 attempts."* Refine as needed (e.g. exclude a known-good egress range, add a `BUCKET` time window, add the targeted-username list to the alert), review the MITRE mapping. Then click **Preview rule results** — since the data from step 1 is already indexed, this runs the generated query against your live, real data (no sample/sandbox set) and should surface the attacker IP (8 distinct users, 14 failed attempts) while the benign IP (2 distinct users) is correctly absent. This is the moment that proves the AI-generated query actually works, before you commit to enabling it. Once satisfied, **Apply to creation** and enable.
 3. **Detect.** Show the alert — the same result seen in the preview now exists as a real alert for the attacker IP, correctly quiet for the benign IP. Walk the aggregation results (`distinct_users`, `failed_attempts`, `targeted_users`) in the alert details.
-4. **Respond (Runscript).** From the alert, run `runscript --script="block-spray-source.ps1" --params="SourceIp=<alert source.ip>"`. Show output (firewall rule created) and script provenance in the Script library.
-5. **Automate (Workflows).** Show the alert-triggered Workflow: create case → attach alert → AI analysis comment (summarizing the targeted usernames) → run `block-spray-source.ps1` → final summary comment. Open the auto-created case.
+4. **Respond & automate (Workflow).** Show the alert-triggered Workflow — one trigger, two parts: **Runscript** runs `block-spray-source.ps1` parameterised with the alert's `SourceIp` and `TargetedUsers`, blocking the offending IP at the Windows Firewall and disabling the sprayed accounts (show output and script provenance in the Script library); **Cases** creates a case, attaches the triggering alert, adds an AI-generated analysis comment summarizing the targeted usernames, then adds a final summary comment noting the actions taken. Open the auto-created case to show the full timeline. This is the pitch: one alert, a consistent automated response every time — no manual RDP or one-off script run required.
 
 ## Cleanup
 
