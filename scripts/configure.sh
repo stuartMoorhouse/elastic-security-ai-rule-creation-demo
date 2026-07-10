@@ -17,7 +17,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TF_DIR="${REPO_ROOT}/terraform"
 ENV_JSON="${REPO_ROOT}/shared/env.json"
 CONFIG_DIR="${REPO_ROOT}/config"
-FLEET_POLICY_PAYLOAD="${CONFIG_DIR}/fleet-agent-policy-payload.json"
 
 FLEET_POLL_INTERVAL_SECS=15
 FLEET_POLL_TIMEOUT_SECS=300
@@ -128,23 +127,25 @@ log "Kibana is reachable and authenticated (HTTP 200 from /api/status)."
 # --------------------------------------------------------------------------
 step "Waiting for the Elastic Agent to show healthy in Fleet (up to ${FLEET_POLL_TIMEOUT_SECS}s)"
 
-if [[ ! -f "${FLEET_POLICY_PAYLOAD}" ]]; then
-    err "Expected fleet agent policy payload not found at ${FLEET_POLICY_PAYLOAD}."
-    exit 1
-fi
-POLICY_NAME="$(jq -r '.name' "${FLEET_POLICY_PAYLOAD}")"
-log "Looking for agent policy named '${POLICY_NAME}'..."
+# The policy is created by terraform/scripts/setup-fleet-policy.sh with name
+# "${var.prefix}-windows-endpoint-policy" (see terraform/fleet_enrollment.tf).
+# config/fleet-agent-policy-payload.json is not read by that script, so we
+# match by the same suffix here instead of relying on a name that may not
+# agree with the deployed var.prefix.
+log "Looking for an agent policy matching '*-windows-endpoint-policy'..."
 
 kibana_get() {
     local path="$1"
     curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" -H 'kbn-xsrf: true' "${KIBANA_URL%/}${path}"
 }
 
-POLICY_ID="$(kibana_get "/api/fleet/agent_policies?perPage=100" \
-    | jq -r --arg name "${POLICY_NAME}" '.items[]? | select(.name == $name) | .id' | head -n1)"
+POLICY_JSON="$(kibana_get "/api/fleet/agent_policies?perPage=100" \
+    | jq -r '[.items[]? | select(.name | endswith("-windows-endpoint-policy"))][0] // empty')"
+POLICY_ID="$(jq -r '.id // empty' <<<"${POLICY_JSON}")"
+POLICY_NAME="$(jq -r '.name // empty' <<<"${POLICY_JSON}")"
 
 if [[ -z "${POLICY_ID}" ]]; then
-    err "No Fleet agent policy named '${POLICY_NAME}' was found in Kibana yet."
+    err "No Fleet agent policy matching '*-windows-endpoint-policy' was found in Kibana yet."
     err "This policy is expected to be created by the Terraform null_resource Fleet-enrollment step - re-check 'terraform apply' output."
     exit 1
 fi
@@ -190,14 +191,17 @@ cat <<EOF
   2. Author the AI/ES|QL detection rule using Agent Builder's AI rule creation.
      Prompt and MITRE mapping reference: ${CONFIG_DIR}/ai-detection-rule-prompt.md
 
-  3. Author the alert-triggered Workflow (create case -> attach alerts ->
-     AI analysis comment -> isolate host -> summary comment).
+  3. Author the alert-triggered Workflow (create case -> attach alert ->
+     AI analysis comment -> run block-spray-source.ps1 response action ->
+     summary comment).
      Reference: ${CONFIG_DIR}/workflow-definition-reference.md
 
-  4. Upload demo/remediate.ps1 to the Elastic Defend Script library so it can
-     be run via a 'runscript' response action from an alert.
+  4. Upload demo/block-spray-source.ps1 to the Elastic Defend Script library
+     so it can be run via a 'runscript' response action from an alert.
 
-  5. RDP to the VM and run demo/simulate-lolbin-chain.ps1 to trigger the demo.
+  5. Run demo/seed-password-spray-data.sh (or the requests in
+     demo/create-sample-data.http) to seed password-spray telemetry and
+     trigger the demo.
 
 See README.md for the full demo flow and acceptance criteria.
 EOF

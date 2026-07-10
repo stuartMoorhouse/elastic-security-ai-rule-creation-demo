@@ -5,18 +5,20 @@
 # Run on the operator's machine between demo takes. Uses the Kibana/
 # Elasticsearch APIs (credentials from ./shared/env.json, written by
 # configure.sh) to clean up the previous take's alerts and cases so the next
-# run of demo/simulate-lolbin-chain.ps1 starts from a clean slate.
+# run of demo/create-sample-data.http starts from a clean slate.
 #
-# This script runs on the operator's machine, NOT the VM - it cannot execute
-# simulate-lolbin-chain.ps1 itself. Re-triggering the simulation for the next
-# take is left as a manual RDP step (printed at the end).
+# This script does not re-seed the password-spray telemetry itself - the
+# delete-by-query + bulk-load requests in demo/create-sample-data.http are
+# left as a manual step (printed at the end) since they're normally run
+# through an HTTP client (for the {{$datetime}} relative-timestamp variables),
+# not curl.
 #
 # Remote remediation via Fleet's endpoint "runscript" response action is
 # intentionally NOT automated here: as of this writing that API surface is
 # new (Elastic Defend GA 9.4) and its exact request schema should be verified
 # against the Kibana API reference for the deployed stack version before
-# scripting against it. Manual "run remediate.ps1 via runscript" instructions
-# are printed instead - see the checklist at the end.
+# scripting against it. Manual "run block-spray-source.ps1 via runscript"
+# instructions are printed instead - see the checklist at the end.
 #
 # Idempotent: safe to re-run, and safe to run when there is nothing to reset.
 
@@ -149,14 +151,14 @@ cat <<EOF
 
   Remaining manual steps for the next take:
 
-  1. RDP to the VM's public IP (see 'terraform output vm_public_ip').
-  2. (Optional, if the previous run's simulated processes/persistence key are
-     still present) In Kibana, select the endpoint and run:
-       runscript --script="remediate.ps1"
-     to clean the VM via the Script library before re-triggering.
-  3. On the VM, re-run:
-       demo/simulate-lolbin-chain.ps1
-     to generate a fresh process tree for the next take.
+  1. (Optional, if the previous take's firewall block rule is still present)
+     In Kibana, select the endpoint and run:
+       runscript --script="block-spray-source.ps1"
+     is not needed for cleanup - the rule is host-specific and harmless to
+     leave in place, or remove it by hand over SSH/RDP if desired.
+  2. Run demo/seed-password-spray-data.sh (or, manually, the requests in
+     demo/create-sample-data.http) to seed fresh password-spray telemetry
+     for the next take.
 
 EOF
 

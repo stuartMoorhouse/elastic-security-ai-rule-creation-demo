@@ -1,6 +1,6 @@
 # config/
 
-Solution-layer config and reference documentation for the webinar demo. Nothing in this directory is a deployable Terraform module, NDJSON rule export, or Workflow definition file — those two artifacts are built manually in Kibana per spec (see below).
+Solution-layer config and reference documentation for the webinar demo. Nothing in this directory is a deployable Terraform module, NDJSON rule export, or Workflow definition file — those two artifacts are built manually in Kibana per spec (see below). The seed-data automation (`demo/seed-password-spray-data.sh`, `demo/create-sample-data.http`) lives in `demo/`, not here — see that directory's own docs.
 
 ## Files
 
@@ -16,11 +16,11 @@ Read by `terraform/scripts/setup-fleet-policy.sh` (part of the Terraform `null_r
 
 ### `ai-detection-rule-prompt.md`
 
-**Manual reference doc** for the presenter. Not consumed by any script. Contains the exact natural-language prompt for Kibana's AI rule creation (Agent Builder), the MITRE ATT&CK techniques to verify on the generated rule (T1218.005, T1059.001, T1059.003, T1547), a step-by-step checklist (review ES\|QL → verify MITRE tags → Apply to creation → enable), and the expected process tree to sanity-check the query against.
+**Manual reference doc** for the presenter. Not consumed by any script. Contains the exact natural-language prompt for Kibana's AI rule creation (Agent Builder), the MITRE ATT&CK technique to verify on the generated rule (T1110.003), a step-by-step checklist (review ES\|QL → verify MITRE tags → **preview against already-seeded live data** → Apply to creation → enable), and the expected aggregation result (attacker IP fires, benign IP doesn't) to validate the live preview and later the alert against. Assumes seed data has already been loaded — see `demo/` step ordering in the top-level README.
 
 ### `workflow-definition-reference.md`
 
-**Manual reference doc** for the presenter. Not consumed by any script. Describes the alert-triggered Workflow to build by hand in Kibana's Workflows UI: create case → attach alert(s) → AI analysis comment → isolate host → final summary comment. Notes that no external notification integration (e.g. Slack) is included by design. Maps directly to spec Acceptance Criteria #9.
+**Manual reference doc** for the presenter. Not consumed by any script. Describes the alert-triggered Workflow to build by hand in Kibana's Workflows UI: create case → attach alert → AI analysis comment → run `block-spray-source.ps1` response action → final summary comment. Notes that no external notification integration (e.g. Slack) is included by design. Maps directly to spec Acceptance Criteria #8.
 
 ## What this project intentionally does NOT automate
 

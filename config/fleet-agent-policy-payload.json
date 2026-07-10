@@ -1,6 +1,6 @@
 {
   "name": "elastic-security-webinar-demo-policy",
-  "description": "Fleet agent policy for the Elastic Security 9.4 webinar demo Windows VM (ClickFix/LOLBin simulation host).",
+  "description": "Fleet agent policy for the Elastic Security 9.4 webinar demo Windows VM (password-spraying detection/response host).",
   "namespace": "default",
   "monitoring_enabled": [
     "logs",

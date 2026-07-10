@@ -7,11 +7,14 @@
 # forces every protection into detect-only mode.
 #
 # Detect-only is deliberate, not a default left over from the EDRComplete
-# preset: demo/simulate-lolbin-chain.ps1 reproduces a LOLBin chain
-# (forfiles->mshta->powershell->curl.exe) that Defend's behavioral
-# prevention could otherwise block/quarantine, which would prevent the AI
-# ES|QL rule from ever seeing the events. Adapted from the working sequence
-# in elastic-agent-builder-workflow-siem-demo/terraform/scripts/deploy-elastic-agent.sh.
+# preset: it keeps Defend's behavioral/malware prevention passive so it can't
+# interfere with the demo's own runscript-based response action
+# (block-spray-source.ps1) or surprise the presenter mid-demo. The password-
+# spraying detection itself runs over synthetic authentication-failure data
+# seeded via demo/create-sample-data.http, not endpoint behavioral telemetry,
+# so Defend's prevention mode has no bearing on whether the AI ES|QL rule
+# sees events. Adapted from the working sequence in
+# elastic-agent-builder-workflow-siem-demo/terraform/scripts/deploy-elastic-agent.sh.
 #
 # Contract (Terraform external data source):
 #   - Reads a single JSON object from stdin (the `query` map — string values
