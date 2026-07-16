@@ -14,5 +14,4 @@ data "http" "my_ip" {
 
 locals {
   my_ip = var.my_ip != "" ? var.my_ip : "${chomp(data.http.my_ip[0].response_body)}/32"
-  )
 }
