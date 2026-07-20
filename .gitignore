@@ -1,0 +1,46 @@
+# Terraform state and local data
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfstate.*.backup
+*.tfstate
+*.tfstate.*
+
+# Terraform variable files with secrets
+*.tfvars
+!*.tfvars.example
+
+# Shared runtime config (may contain secrets/credentials)
+shared/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Secrets and credentials
+*.pem
+*.key
+*.env
+.env
+.env.*
+!.env.example
+secrets.json
+credentials.json
