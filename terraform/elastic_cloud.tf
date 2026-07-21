@@ -34,3 +34,48 @@ resource "ec_deployment" "main" {
   # fleet_enrollment.tf (see /api/fleet/fleet_server_hosts).
   integrations_server = {}
 }
+
+# Install the Okta integration package so its ingest pipeline is registered.
+# The pipeline maps raw Okta System Log fields to ECS (okta.event_type, user.name, source.ip, etc.).
+resource "null_resource" "okta_integration" {
+  triggers = {
+    deployment_id = ec_deployment.main.id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      OKTA_INFO=$(curl -sf \
+        -u "${ec_deployment.main.elasticsearch_username}:${ec_deployment.main.elasticsearch_password}" \
+        -H "kbn-xsrf: true" \
+        "${ec_deployment.main.kibana.https_endpoint}/api/fleet/epm/packages/okta")
+      OKTA_VERSION=$(echo "$OKTA_INFO" | jq -r '.item.version // .response.version')
+      OKTA_STATUS=$(echo "$OKTA_INFO"  | jq -r '.item.status  // .response.status')
+      if [ "$OKTA_STATUS" != "installed" ]; then
+        curl -sf \
+          -u "${ec_deployment.main.elasticsearch_username}:${ec_deployment.main.elasticsearch_password}" \
+          -H "kbn-xsrf: true" -H "Content-Type: application/json" \
+          -X POST \
+          "${ec_deployment.main.kibana.https_endpoint}/api/fleet/epm/packages/okta/$OKTA_VERSION" \
+          -d '{}'
+      fi
+    EOT
+  }
+}
+
+# Set the default Kibana space to the Security solution view.
+resource "null_resource" "kibana_security_solution" {
+  triggers = {
+    deployment_id = ec_deployment.main.id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      curl -sf \
+        -u "${ec_deployment.main.elasticsearch_username}:${ec_deployment.main.elasticsearch_password}" \
+        -H "kbn-xsrf: true" \
+        -H "Content-Type: application/json" \
+        -X PUT "${ec_deployment.main.kibana.https_endpoint}/api/spaces/space/default" \
+        -d '{"id":"default","name":"Default","solution":"security"}'
+    EOT
+  }
+}

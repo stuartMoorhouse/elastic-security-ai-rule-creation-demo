@@ -5,15 +5,28 @@ $fleetUrl = "${fleet_url}"
 $enrollmentToken = "${enrollment_token}"
 
 $dest = "C:\ElasticAgent"
-New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-$zip = "$dest\elastic-agent.zip"
-$uri = "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$version-windows-x86_64.zip"
+$svc = Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue
+if (-not ($svc -and $svc.Status -eq "Running")) {
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-Invoke-WebRequest -Uri $uri -OutFile $zip -UseBasicParsing
-Expand-Archive -Path $zip -DestinationPath $dest -Force
+    $zip = "$dest\elastic-agent.zip"
+    $uri = "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$version-windows-x86_64.zip"
 
-$agentDir = (Get-ChildItem -Path $dest -Directory -Filter "elastic-agent-*" | Select-Object -First 1).FullName
-Set-Location $agentDir
+    Invoke-WebRequest -Uri $uri -OutFile $zip -UseBasicParsing
+    Expand-Archive -Path $zip -DestinationPath $dest -Force
 
-& .\elastic-agent.exe install --url="$fleetUrl" --enrollment-token="$enrollmentToken" --non-interactive --force
+    $agentDir = (Get-ChildItem -Path $dest -Directory -Filter "elastic-agent-*" | Select-Object -First 1).FullName
+    Set-Location $agentDir
+
+    & .\elastic-agent.exe install --url="$fleetUrl" --enrollment-token="$enrollmentToken" --non-interactive --force
+}
+
+# Create a demo local account that matches the compromised Okta username (jsmith@example.com → jsmith).
+# The remediate-okta-compromise.ps1 runscript disables this account as part of the automated response.
+$demoUser = "jsmith"
+if (-not (Get-LocalUser -Name $demoUser -ErrorAction SilentlyContinue)) {
+    $pwd = ConvertTo-SecureString "DemoUser@2024!" -AsPlainText -Force
+    New-LocalUser -Name $demoUser -Password $pwd -FullName "John Smith (demo)" -Description "Demo account for Okta compromise runscript scenario"
+    Add-LocalGroupMember -Group "Users" -Member $demoUser
+}

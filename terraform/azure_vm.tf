@@ -74,4 +74,12 @@ resource "azurerm_virtual_machine_extension" "elastic_agent" {
   protected_settings = jsonencode({
     commandToExecute = local.install_command
   })
+
+  # Don't re-run the install script on already-provisioned VMs. The agent is
+  # enrolled and running; re-running the extension when the script changes
+  # (new token, version bump, etc.) would try to overwrite locked agent files.
+  # Taint this resource manually if a full re-enroll is needed.
+  lifecycle {
+    ignore_changes = [protected_settings]
+  }
 }

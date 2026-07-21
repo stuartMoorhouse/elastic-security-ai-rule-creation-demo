@@ -123,7 +123,42 @@ rm -f /tmp/configure_kibana_status.$$
 log "Kibana is reachable and authenticated (HTTP 200 from /api/status)."
 
 # --------------------------------------------------------------------------
-# 4. Poll Fleet for a healthy agent on the demo policy
+# 4. Install the Okta integration package (registers the ingest pipeline)
+# --------------------------------------------------------------------------
+step "Installing Okta integration package"
+
+OKTA_INFO="$(curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    -H 'kbn-xsrf: true' \
+    "${KIBANA_URL%/}/api/fleet/epm/packages/okta")"
+
+OKTA_VERSION="$(jq -r '.item.version // .response.version // empty' <<<"${OKTA_INFO}")"
+OKTA_STATUS="$(jq -r  '.item.status  // .response.status  // "not_installed"' <<<"${OKTA_INFO}")"
+
+if [[ -z "${OKTA_VERSION}" ]]; then
+    err "Could not determine Okta integration version from Fleet API. Response: ${OKTA_INFO}"
+    exit 1
+fi
+
+log "Okta integration version: ${OKTA_VERSION} (status: ${OKTA_STATUS})"
+
+if [[ "${OKTA_STATUS}" != "installed" ]]; then
+    log "Installing..."
+    INSTALL_RESPONSE="$(curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+        -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+        -X POST "${KIBANA_URL%/}/api/fleet/epm/packages/okta/${OKTA_VERSION}" \
+        -d '{}')"
+    if jq -e '.items // .response' <<<"${INSTALL_RESPONSE}" >/dev/null 2>&1; then
+        log "Okta integration installed."
+    else
+        err "Unexpected response installing Okta integration: ${INSTALL_RESPONSE}"
+        exit 1
+    fi
+else
+    log "Okta integration already installed — skipping."
+fi
+
+# --------------------------------------------------------------------------
+# 5. Poll Fleet for a healthy agent on the demo policy
 # --------------------------------------------------------------------------
 step "Waiting for the Elastic Agent to show healthy in Fleet (up to ${FLEET_POLL_TIMEOUT_SECS}s)"
 
@@ -188,22 +223,21 @@ cat <<EOF
   1. Install Elastic Defend on the VM via Kibana Fleet (Fleet > Agents > select
      the agent > Add integration > Elastic Defend).
 
-  2. Author the AI/ES|QL detection rule using Agent Builder's AI rule creation.
+  2. Upload demo/remediate-okta-compromise.ps1 to the Elastic Defend Script
+     library as a Remediation Action.
+
+  3. Author the AI/ES|QL detection rule using Agent Builder's AI rule creation.
      Prompt and MITRE mapping reference: ${CONFIG_DIR}/ai-detection-rule-prompt.md
 
-  3. Author the alert-triggered Workflow (create case -> attach alert ->
-     AI analysis comment -> run block-spray-source.ps1 response action ->
-     summary comment).
-     Reference: ${CONFIG_DIR}/workflow-definition-reference.md
+     When saving the rule, add the Workflow deployed by Terraform as a rule action.
+     Workflow ID: $(cat "${PROJECT_DIR}/state/workflow-id" 2>/dev/null || echo "(see state/workflow-id after terraform apply)")
 
-  4. Upload demo/block-spray-source.ps1 to the Elastic Defend Script library
-     so it can be run via a 'runscript' response action from an alert.
+  4. Run demo/seed-okta-attack-data.sh to seed Okta telemetry and trigger the demo.
 
-  5. Run demo/seed-password-spray-data.sh (or the requests in
-     demo/create-sample-data.http) to seed password-spray telemetry and
-     trigger the demo.
+The Workflow (terraform/workflows/okta-credential-stuffing.yaml) is deployed
+automatically by terraform apply — no manual Workflow authoring needed.
 
-See README.md for the full demo flow and acceptance criteria.
+See README.md for the full demo flow.
 EOF
 
 log ""

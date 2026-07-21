@@ -5,13 +5,7 @@
 # Run on the operator's machine between demo takes. Uses the Kibana/
 # Elasticsearch APIs (credentials from ./shared/env.json, written by
 # configure.sh) to clean up the previous take's alerts and cases so the next
-# run of demo/create-sample-data.http starts from a clean slate.
-#
-# This script does not re-seed the password-spray telemetry itself - the
-# delete-by-query + bulk-load requests in demo/create-sample-data.http are
-# left as a manual step (printed at the end) since they're normally run
-# through an HTTP client (for the {{$datetime}} relative-timestamp variables),
-# not curl.
+# clean slate for the next take.
 #
 # Remote remediation via Fleet's endpoint "runscript" response action is
 # intentionally NOT automated here: as of this writing that API surface is
@@ -141,24 +135,24 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 3. Manual next-take instructions
+# 3. Re-seed Okta attack telemetry for the next take
 # --------------------------------------------------------------------------
-step "Next steps for the next take"
+step "Seeding fresh Okta attack telemetry"
+
+bash "${REPO_ROOT}/demo/seed-okta-attack-data.sh"
+
+# --------------------------------------------------------------------------
+# 4. Next-take checklist
+# --------------------------------------------------------------------------
+step "Reset complete"
 
 cat <<EOF
 
-  Alerts and cases from the previous take have been reset (see above).
+  Alerts, cases, and Okta telemetry have been reset.
 
-  Remaining manual steps for the next take:
-
-  1. (Optional, if the previous take's firewall block rule is still present)
-     In Kibana, select the endpoint and run:
-       runscript --script="block-spray-source.ps1"
-     is not needed for cleanup - the rule is host-specific and harmless to
-     leave in place, or remove it by hand over SSH/RDP if desired.
-  2. Run demo/seed-password-spray-data.sh (or, manually, the requests in
-     demo/create-sample-data.http) to seed fresh password-spray telemetry
-     for the next take.
+  One optional manual step:
+  - If the previous take's firewall block rule is still on the endpoint,
+    it is harmless to leave in place. Remove via RDP/SSH if desired.
 
 EOF
 

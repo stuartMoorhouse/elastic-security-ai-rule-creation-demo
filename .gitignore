@@ -1,3 +1,13 @@
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Runtime state (populated after terraform apply)
+state/
+
+# Terraform plan output
+terraform/tfplan.out
+
 # Terraform state and local data
 terraform/.terraform/
 terraform/.terraform.lock.hcl

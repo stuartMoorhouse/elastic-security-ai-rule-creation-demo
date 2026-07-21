@@ -71,38 +71,155 @@ es_post() {
         -X POST "${ES_URL%/}${path}" -d "${body}"
 }
 
+next_uuid() {
+    if command -v uuidgen >/dev/null 2>&1; then
+        uuidgen | tr '[:upper:]' '[:lower:]'
+    elif [[ -f /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid
+    else
+        python3 -c "import uuid; print(uuid.uuid4())"
+    fi
+}
+
 build_okta_event() {
     local ts="$1" action="$2" outcome="$3" ip="$4" user="$5" reason="${6:-}"
-    local outcome_upper
+    local outcome_upper uuid
     outcome_upper="$(printf '%s' "${outcome}" | tr '[:lower:]' '[:upper:]')"
+    uuid="$(next_uuid)"
 
-    jq -nc \
-        --arg ts      "$ts" \
-        --arg action  "$action" \
-        --arg outcome "$outcome" \
-        --arg oupper  "$outcome_upper" \
-        --arg ip      "$ip" \
-        --arg user    "$user" \
-        --arg reason  "$reason" \
+    # Map action+outcome to Okta displayMessage, legacyEventType, severity
+    local display_msg legacy_type severity
+    case "${action}:${outcome_upper}" in
+        user.session.start:FAILURE|user.authentication.usernamepassword:FAILURE)
+            display_msg="User login to Okta"; legacy_type="core.user_auth.login_failed"; severity="WARN" ;;
+        user.session.start:SUCCESS)
+            display_msg="User login to Okta"; legacy_type="core.user_auth.login_success"; severity="INFO" ;;
+        user.authentication.auth_via_mfa:FAILURE)
+            display_msg="Authentication via MFA"; legacy_type="core.user_auth.mfa.factor.attempt_fail"; severity="WARN" ;;
+        user.account.privilege.grant:*)
+            display_msg="Grant user privilege"; legacy_type="core.user.account.privilege.grant"; severity="INFO" ;;
+        *)
+            display_msg="${action}"; legacy_type="${action}"; severity="INFO" ;;
+    esac
+
+    # Attacker IP — VPN exit node geo + proxy flag
+    # Benign IP   — residential US geo
+    local city state country postal lat lon as_num as_org isp domain is_proxy threat
+    if [[ "${ip}" == "${ATTACKER_IP}" ]]; then
+        city="Frankfurt"; state="Hesse"; country="Germany"; postal="60311"
+        lat=50.1109;  lon=8.6821
+        as_num=205100; as_org="anonymous vpn"; isp="anon hosting"; domain="anonymous.example"
+        is_proxy=true; threat="true"
+    else
+        city="Chicago"; state="Illinois"; country="United States"; postal="60601"
+        lat=41.8781; lon=-87.6298
+        as_num=7922; as_org="Comcast Cable"; isp="Comcast"; domain="comcast.net"
+        is_proxy=false; threat="false"
+    fi
+
+    # Build the raw Okta JSON object, then serialise it into the `message` field.
+    # The ingest pipeline (logs-okta.system-3.15.0) expects:
+    #   message (string) → renamed to event.original → parsed as json.* → mapped to ECS
+    local okta_json
+    okta_json="$(jq -nc \
+        --arg ts          "$ts" \
+        --arg uuid        "$uuid" \
+        --arg action      "$action" \
+        --arg oupper      "$outcome_upper" \
+        --arg reason      "$reason" \
+        --arg user        "$user" \
+        --arg display_msg "$display_msg" \
+        --arg legacy_type "$legacy_type" \
+        --arg severity    "$severity" \
+        --arg ip          "$ip" \
+        --arg city        "$city" \
+        --arg state       "$state" \
+        --arg country     "$country" \
+        --arg postal      "$postal" \
+        --argjson lat     "$lat" \
+        --argjson lon     "$lon" \
+        --argjson as_num  "$as_num" \
+        --arg as_org      "$as_org" \
+        --arg isp         "$isp" \
+        --arg domain      "$domain" \
+        --argjson is_proxy "$is_proxy" \
+        --arg threat      "$threat" \
         '{
-            "@timestamp": $ts,
-            "event": {
-                "action":   $action,
-                "outcome":  $outcome,
-                "dataset":  "okta.system",
-                "category": ["authentication"],
-                "kind":     "event"
+            "published":       $ts,
+            "uuid":            $uuid,
+            "eventType":       $action,
+            "displayMessage":  $display_msg,
+            "severity":        $severity,
+            "version":         "0",
+            "legacyEventType": $legacy_type,
+            "outcome": {
+                "result": $oupper,
+                "reason": (if $reason != "" then $reason else null end)
             },
-            "okta": {
-                "event_type": $action,
-                "outcome": ({"result": $oupper} +
-                    if $reason != "" then {"reason": $reason} else {} end)
+            "actor": {
+                "id":          ("00u" + $uuid[0:17]),
+                "type":        "User",
+                "alternateId": $user,
+                "displayName": ($user | split("@")[0] | split(".") |
+                                map(. as $w | ($w[0:1] | ascii_upcase) + $w[1:]) | join(" ")),
+                "detailEntry": null
             },
-            "source":      {"ip": $ip},
-            "client":      {"ip": $ip},
-            "user":        {"name": $user, "email": $user},
-            "data_stream": {"dataset": "okta.system", "namespace": "default", "type": "logs"}
-        }'
+            "client": {
+                "userAgent": {
+                    "rawUserAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                    "os":           "Linux",
+                    "browser":      "CHROME"
+                },
+                "zone":      "null",
+                "device":    "Computer",
+                "id":        null,
+                "ipAddress": $ip,
+                "geographicalContext": {
+                    "city":        $city,
+                    "state":       $state,
+                    "country":     $country,
+                    "postalCode":  $postal,
+                    "geolocation": {"lat": $lat, "lon": $lon}
+                }
+            },
+            "authenticationContext": {
+                "authenticationProvider": null,
+                "credentialProvider":     null,
+                "credentialType":         null,
+                "issuer":                 null,
+                "externalSessionId":      "unknown",
+                "interface":              null
+            },
+            "securityContext": {
+                "asNumber": $as_num,
+                "asOrg":    $as_org,
+                "isp":      $isp,
+                "domain":   $domain,
+                "isProxy":  $is_proxy
+            },
+            "debugContext": {
+                "debugData": {
+                    "requestUri":        "/api/v1/authn",
+                    "requestId":         $uuid,
+                    "threatSuspected":   $threat,
+                    "deviceFingerprint": "a1b2c3d4e5f6a7b8c9d0e1f2"
+                }
+            },
+            "transaction": {"type": "WEB", "id": $uuid, "detail": {}},
+            "request": {
+                "ipChain": [{
+                    "ip":                 $ip,
+                    "geographicalContext": {"city": $city, "country": $country},
+                    "version":            "V4",
+                    "source":             null
+                }]
+            },
+            "target": null
+        }')"
+
+    # Wrap in the envelope the ingest pipeline expects: message = Okta JSON string
+    jq -nc --arg ts "$ts" --arg msg "$okta_json" \
+        '{"@timestamp": $ts, "message": $msg}'
 }
 
 ATTACKER_BULK=""
@@ -117,7 +234,10 @@ add() {
 step "Clearing previous take's demo events (${ATTACKER_IP}, ${BENIGN_IP})"
 
 DELETE_BODY="$(jq -n --arg a "${ATTACKER_IP}" --arg b "${BENIGN_IP}" \
-    '{query: {terms: {"source.ip": [$a, $b]}}}')"
+    '{query: {bool: {should: [
+        {terms: {"source.ip":      [$a, $b]}},
+        {terms: {"client.ipAddress": [$a, $b]}}
+    ], minimum_should_match: 1}}}')"
 DELETE_RESPONSE="$(es_post "/${DATA_STREAM}/_delete_by_query?refresh=true&conflicts=proceed" "${DELETE_BODY}")"
 DELETED="$(jq -r '.deleted // "unknown"' <<<"${DELETE_RESPONSE}" 2>/dev/null || echo "unknown")"
 log "Deleted ${DELETED} previous demo event(s)."
@@ -130,21 +250,21 @@ log "Deleted ${DELETED} previous demo event(s)."
 step "Seeding attacker IP ${ATTACKER_IP}"
 
 # bjones: Stage 1 only — 3 failed logins, no further stages
-add "$(minutes_ago 45)" "user.session.start" "failure" "$ATTACKER_IP" "bjones@example.com" "INVALID_CREDENTIALS"
-add "$(minutes_ago 43)" "user.session.start" "failure" "$ATTACKER_IP" "bjones@example.com" "INVALID_CREDENTIALS"
-add "$(minutes_ago 41)" "user.session.start" "failure" "$ATTACKER_IP" "bjones@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 45)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "bjones@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 43)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "bjones@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 41)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "bjones@example.com" "INVALID_CREDENTIALS"
 
 # alee: Stage 1 only — 2 failed logins
-add "$(minutes_ago 38)" "user.session.start" "failure" "$ATTACKER_IP" "alee@example.com" "INVALID_CREDENTIALS"
-add "$(minutes_ago 36)" "user.session.start" "failure" "$ATTACKER_IP" "alee@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 38)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "alee@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 36)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "alee@example.com" "INVALID_CREDENTIALS"
 
 # jsmith: full attack chain — FIRES the rule
 # Stage 1: credential stuffing — 5 failed logins
-add "$(minutes_ago 30)" "user.session.start" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
-add "$(minutes_ago 28)" "user.session.start" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
-add "$(minutes_ago 26)" "user.session.start" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
-add "$(minutes_ago 24)" "user.session.start" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
-add "$(minutes_ago 22)" "user.session.start" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 30)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 28)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 26)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 24)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
+add "$(minutes_ago 22)" "user.authentication.usernamepassword" "failure" "$ATTACKER_IP" "jsmith@example.com" "INVALID_CREDENTIALS"
 # Stage 2: MFA fatigue — 2 push failures
 add "$(minutes_ago 20)" "user.authentication.auth_via_mfa" "failure" "$ATTACKER_IP" "jsmith@example.com" "FACTOR_CHALLENGE_TIMEOUT"
 add "$(minutes_ago 18)" "user.authentication.auth_via_mfa" "failure" "$ATTACKER_IP" "jsmith@example.com" "FACTOR_CHALLENGE_TIMEOUT"
@@ -169,7 +289,7 @@ step "Seeding benign IP ${BENIGN_IP} (forgot password, below threshold)"
 
 BENIGN_BULK=""
 BENIGN_BULK+="{\"create\":{}}"$'\n'
-BENIGN_BULK+="$(build_okta_event "$(minutes_ago 10)" "user.session.start" "failure" "$BENIGN_IP" "mwilson@example.com" "INVALID_CREDENTIALS")"$'\n'
+BENIGN_BULK+="$(build_okta_event "$(minutes_ago 10)" "user.authentication.usernamepassword" "failure" "$BENIGN_IP" "mwilson@example.com" "INVALID_CREDENTIALS")"$'\n'
 BENIGN_BULK+="{\"create\":{}}"$'\n'
 BENIGN_BULK+="$(build_okta_event "$(minutes_ago 8)" "user.session.start" "success" "$BENIGN_IP" "mwilson@example.com")"$'\n'
 
