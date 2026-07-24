@@ -132,7 +132,31 @@ rm -f /tmp/configure_kibana_status.$$
 log "Kibana is reachable and authenticated (HTTP 200 from /api/status)."
 
 # --------------------------------------------------------------------------
-# 4. Install the Okta integration package (registers the ingest pipeline)
+# 4. Ensure .logs-endpoint.actions-default data stream exists
+#    (required for response actions / run_script; not auto-created on new deployments)
+# --------------------------------------------------------------------------
+step "Initialising endpoint response-actions data stream"
+
+ACTIONS_DS_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+    -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    "${ELASTICSEARCH_URL%/}/.logs-endpoint.actions-default/_count" || true)"
+
+if [[ "${ACTIONS_DS_STATUS}" == "200" ]]; then
+    log ".logs-endpoint.actions-default already exists — skipping."
+else
+    HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+        -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+        -H 'Content-Type: application/json' \
+        -X PUT "${ELASTICSEARCH_URL%/}/_data_stream/.logs-endpoint.actions-default" || true)"
+    if [[ "${HTTP_CODE}" == "200" ]]; then
+        log "Created .logs-endpoint.actions-default (HTTP ${HTTP_CODE})."
+    else
+        log "Warning: could not create .logs-endpoint.actions-default (HTTP ${HTTP_CODE}) — run_script response actions may not work."
+    fi
+fi
+
+# --------------------------------------------------------------------------
+# 6. Install the Okta integration package (registers the ingest pipeline)
 # --------------------------------------------------------------------------
 step "Installing Okta integration package"
 
@@ -167,7 +191,7 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 5. Poll Fleet for a healthy agent on the demo policy
+# 7. Poll Fleet for a healthy agent on the demo policy
 # --------------------------------------------------------------------------
 step "Waiting for the Elastic Agent to show healthy in Fleet (up to ${FLEET_POLL_TIMEOUT_SECS}s)"
 
@@ -223,7 +247,7 @@ mv "${TMP_ENV_JSON}" "${ENV_JSON}"
 chmod 600 "${ENV_JSON}"
 
 # --------------------------------------------------------------------------
-# 5. Manual steps checklist
+# 8. Manual steps checklist
 # --------------------------------------------------------------------------
 step "Manual steps remaining (not automated by Terraform - see README.md)"
 
