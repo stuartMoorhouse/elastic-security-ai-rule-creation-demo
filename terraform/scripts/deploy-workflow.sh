@@ -103,8 +103,8 @@ while [[ $ATTEMPT -lt $MAX_ATTEMPTS ]]; do
         KUERY="policy_id:\"${POLICY_ID}\""
         ENCODED_KUERY="$(jq -rn --arg q "$KUERY" '$q | @uri')"
         AGENTS="$(kb "${KIBANA_URL}/api/fleet/agents?kuery=${ENCODED_KUERY}" 2>/dev/null || echo '{}')"
-        STATUS="$(jq -r '.items[0].status // empty' <<<"$AGENTS")"
-        AGENT_ID="$(jq -r '.items[0].id // empty' <<<"$AGENTS")"
+        STATUS="$(jq -r '(.list // .items)[0].status // empty' <<<"$AGENTS")"
+        AGENT_ID="$(jq -r '(.list // .items)[0].id // empty' <<<"$AGENTS")"
 
         if [[ ("$STATUS" == "online" || "$STATUS" == "healthy") && -n "$AGENT_ID" ]]; then
             log "  Found agent ${AGENT_ID} (status: ${STATUS})"
@@ -133,26 +133,43 @@ log "Injecting windows_agent_id into workflow YAML..."
 WORKFLOW_YAML="$(sed "s|windows_agent_id: \"\"|windows_agent_id: \"${AGENT_ID}\"|" "$WORKFLOW_DEF")"
 
 # =============================================================================
-# STEP 5: Import the workflow
+# STEP 5: Import the workflow (POST to create, then PUT to validate/enable)
 # =============================================================================
 
-log "Importing workflow via /api/workflows/workflow..."
-WORKFLOW_RESPONSE="$(echo "$WORKFLOW_YAML" \
-    | jq -Rs '{yaml: .}' \
+log "Creating workflow via POST /api/workflows/workflow..."
+POST_RESPONSE="$(echo "$WORKFLOW_YAML" \
+    | python3 -c "import sys,json; print(json.dumps({'yaml': sys.stdin.read()}))" \
     | kb_json -X POST "${KIBANA_URL}/api/workflows/workflow" -d @- 2>/dev/null)"
 
-WORKFLOW_ID="$(jq -r '.id // .data.id // empty' <<<"$WORKFLOW_RESPONSE" 2>/dev/null || echo "")"
+WORKFLOW_ID="$(echo "$POST_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")"
 
-if [[ -n "$WORKFLOW_ID" ]]; then
-    log "Workflow imported (ID: ${WORKFLOW_ID})"
+if [[ -z "$WORKFLOW_ID" ]]; then
+    warn "Could not parse workflow ID from POST response:"
+    echo "$POST_RESPONSE"
+    warn "The workflow may need to be imported manually via the Kibana Workflows UI."
+    warn "Workflow YAML is at: ${WORKFLOW_DEF}"
+else
+    log "Workflow created (ID: ${WORKFLOW_ID}) — validating via PUT..."
+
+    # PUT triggers real schema validation and enables the workflow.
+    # POST accepts any YAML silently; PUT returns validationErrors if the schema is wrong.
+    PUT_RESPONSE="$(echo "$WORKFLOW_YAML" \
+        | python3 -c "import sys,json; print(json.dumps({'yaml': sys.stdin.read()}))" \
+        | kb_json -X PUT "${KIBANA_URL}/api/workflows/workflow/${WORKFLOW_ID}" -d @- 2>/dev/null)"
+
+    VALID="$(echo "$PUT_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('valid','?'))" 2>/dev/null)"
+    ERRORS="$(echo "$PUT_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); errs=d.get('validationErrors',[]); print('\n'.join(errs))" 2>/dev/null)"
+
+    if [[ "$VALID" == "True" ]]; then
+        log "Workflow is valid and enabled."
+    else
+        warn "Workflow validation errors:"
+        echo "$ERRORS"
+    fi
+
     mkdir -p "$STATE_DIR"
     echo "$WORKFLOW_ID" > "$WORKFLOW_ID_FILE"
     log "Workflow ID saved to ${WORKFLOW_ID_FILE}"
-else
-    warn "Could not parse workflow ID. Response:"
-    jq . <<<"$WORKFLOW_RESPONSE" 2>/dev/null || echo "$WORKFLOW_RESPONSE"
-    warn "The workflow may need to be imported manually via the Kibana Workflows UI."
-    warn "Workflow YAML is at: ${WORKFLOW_DEF}"
 fi
 
 # =============================================================================

@@ -60,6 +60,9 @@ KIBANA_URL="$(extract_output kibana_url)"
 ELASTICSEARCH_URL="$(extract_output elasticsearch_url)"
 ELASTIC_USERNAME="$(extract_output elastic_username)"
 ELASTIC_PASSWORD="$(extract_output elastic_password)"
+VM_PUBLIC_IP="$(extract_output vm_public_ip)"
+VM_ADMIN_USERNAME="$(extract_output vm_admin_username)"
+VM_ADMIN_PASSWORD="$(extract_output vm_admin_password)"
 
 MISSING=()
 [[ -z "${KIBANA_URL}" ]] && MISSING+=("kibana_url")
@@ -93,10 +96,16 @@ jq \
     --arg elasticsearch_url "${ELASTICSEARCH_URL}" \
     --arg elastic_username "${ELASTIC_USERNAME}" \
     --arg elastic_password "${ELASTIC_PASSWORD}" \
+    --arg vm_public_ip "${VM_PUBLIC_IP}" \
+    --arg vm_admin_username "${VM_ADMIN_USERNAME}" \
+    --arg vm_admin_password "${VM_ADMIN_PASSWORD}" \
     '.kibana_url = $kibana_url
      | .elasticsearch_url = $elasticsearch_url
      | .elastic_username = $elastic_username
      | .elastic_password = $elastic_password
+     | .vm_public_ip = $vm_public_ip
+     | .vm_admin_username = $vm_admin_username
+     | .vm_admin_password = $vm_admin_password
      | .infra_ready = true' \
     "${ENV_JSON}" > "${TMP_ENV_JSON}"
 mv "${TMP_ENV_JSON}" "${ENV_JSON}"
@@ -230,7 +239,7 @@ cat <<EOF
      Prompt and MITRE mapping reference: ${CONFIG_DIR}/ai-detection-rule-prompt.md
 
      When saving the rule, add the Workflow deployed by Terraform as a rule action.
-     Workflow ID: $(cat "${PROJECT_DIR}/state/workflow-id" 2>/dev/null || echo "(see state/workflow-id after terraform apply)")
+     Workflow ID: $(cat "${REPO_ROOT}/state/workflow-id" 2>/dev/null || echo "(see state/workflow-id after terraform apply)")
 
   4. Run demo/seed-okta-attack-data.sh to seed Okta telemetry and trigger the demo.
 
