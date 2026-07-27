@@ -1,6 +1,6 @@
 # config/
 
-Solution-layer config and reference documentation for the webinar demo. Nothing in this directory is a deployable Terraform module, NDJSON rule export, or Workflow definition file — those two artifacts are built manually in Kibana per spec (see below). The seed-data automation (`demo/seed-password-spray-data.sh`, `demo/create-sample-data.http`) lives in `demo/`, not here — see that directory's own docs.
+Solution-layer config and reference documentation for the webinar demo. Nothing in this directory is a deployable Terraform module, NDJSON rule export, or Workflow definition file — those two artifacts are built manually in Kibana per spec (see below). The seed-data automation (`scripts/seed-password-spray-data.sh`, `scripts/create-sample-data.http`) lives in `scripts/`.
 
 ## Files
 
@@ -16,7 +16,7 @@ Read by `terraform/scripts/setup-fleet-policy.sh` (part of the Terraform `null_r
 
 ### `ai-detection-rule-prompt.md`
 
-**Manual reference doc** for the presenter. Not consumed by any script. Contains the exact natural-language prompt for Kibana's AI rule creation (Agent Builder), the MITRE ATT&CK technique to verify on the generated rule (T1110.003), a step-by-step checklist (review ES\|QL → verify MITRE tags → **preview against already-seeded live data** → Apply to creation → enable), and the expected aggregation result (attacker IP fires, benign IP doesn't) to validate the live preview and later the alert against. Assumes seed data has already been loaded — see `demo/` step ordering in the top-level README.
+**Manual reference doc** for the presenter. Not consumed by any script. Contains the exact natural-language prompt for Kibana's AI rule creation (Agent Builder), the MITRE ATT&CK technique to verify on the generated rule (T1110.003), a step-by-step checklist (review ES\|QL → verify MITRE tags → **preview against already-seeded live data** → Apply to creation → enable), and the expected aggregation result (attacker IP fires, benign IP doesn't) to validate the live preview and later the alert against. Assumes seed data has already been loaded — see the top-level README.
 
 ### `workflow-definition-reference.md`
 

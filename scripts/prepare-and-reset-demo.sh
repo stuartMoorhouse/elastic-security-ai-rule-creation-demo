@@ -139,7 +139,7 @@ fi
 # --------------------------------------------------------------------------
 step "Seeding fresh Okta attack telemetry"
 
-bash "${REPO_ROOT}/demo/seed-okta-attack-data.sh"
+bash "${REPO_ROOT}/scripts/seed-okta-attack-data.sh"
 
 # --------------------------------------------------------------------------
 # 4. Next-take checklist

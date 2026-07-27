@@ -246,7 +246,7 @@ log "Elastic Agent is healthy on policy '${POLICY_NAME}'."
 # --------------------------------------------------------------------------
 step "Uploading remediation script to Elastic Defend Script Library"
 
-REMEDIATION_SCRIPT="${REPO_ROOT}/demo/remediate-okta-compromise.ps1"
+REMEDIATION_SCRIPT="${REPO_ROOT}/scripts/remediate-okta-compromise.ps1"
 STATE_DIR="${REPO_ROOT}/state"
 SCRIPT_ID_FILE="${STATE_DIR}/script-id"
 
@@ -320,7 +320,7 @@ cat <<EOF
      Workflow ID:  $(cat "${REPO_ROOT}/state/workflow-id" 2>/dev/null || echo "(see state/workflow-id after terraform apply)")
      Script ID:    $(cat "${SCRIPT_ID_FILE}" 2>/dev/null || echo "(see state/script-id after configure.sh)")
 
-  3. Run demo/seed-okta-attack-data.sh to seed Okta telemetry and trigger the demo.
+  3. Run scripts/seed-okta-attack-data.sh to seed Okta telemetry and trigger the demo.
 
 The Workflow and remediation Script are deployed automatically — no manual uploads needed.
 

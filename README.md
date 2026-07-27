@@ -6,7 +6,7 @@ Self-contained demo of AI-assisted detection, Runscript response, and Workflow-d
 
 **Okta credential stuffing and account takeover** — an attacker uses a list of breached credentials to spray multiple Okta accounts, pushes through MFA, and then takes post-compromise actions (privilege escalation, policy changes) once inside. The detection requires the *full four-stage sequence* to be present for the same `user.name` and `source.ip`: failed logins with `INVALID_CREDENTIALS`, MFA failures, a successful login, and at least one post-compromise action. This is what makes it high-fidelity: a user who forgets their password won't match (no MFA failures, no post-compromise), and an attacker stopped at MFA won't match either.
 
-Demo telemetry is synthetic Okta system log events (`logs-okta.system-default`), seeded via `demo/seed-okta-attack-data.sh`. One attacker IP completes the full chain against `jsmith@example.com` (fires the rule); two other accounts (`bjones`, `alee`) get failed logins only; one benign IP (`mwilson`) has a single failed login then success (forgot password — correctly silent).
+Demo telemetry is synthetic Okta system log events (`logs-okta.system-default`), seeded via `scripts/seed-okta-attack-data.sh`. One attacker IP completes the full chain against `jsmith@example.com` (fires the rule); two other accounts (`bjones`, `alee`) get failed logins only; one benign IP (`mwilson`) has a single failed login then success (forgot password — correctly silent).
 
 MITRE: T1110.004 (Credential Stuffing), T1078 (Valid Accounts), T1098 (Account Manipulation).
 
@@ -37,8 +37,8 @@ terraform -chdir=terraform apply
 - Creates the Elastic Cloud deployment (Elasticsearch + Kibana)
 - Provisions the Azure Windows VM, VNet, NSG, public IP
 - Installs and enrolls the Elastic Agent on the VM
-- Deploys the Okta Credential Stuffing Response workflow to Kibana and writes its ID to `state/workflow-id`
-- Runs `scripts/configure.sh` — writes `shared/env.json`, creates the endpoint response-actions data stream, installs the Okta Fleet integration, waits for the agent to show healthy in Fleet, and uploads `demo/remediate-okta-compromise.ps1` to the Script library (saving its UUID to `state/script-id`)
+- Deploys the **Okta Credential Stuffing Response** workflow to Kibana
+- Runs `scripts/configure.sh` — writes `shared/env.json`, creates the endpoint response-actions data stream, installs the Okta Fleet integration, waits for the agent to show healthy in Fleet, and uploads `scripts/remediate-okta-compromise.ps1` to the Script library (saving its UUID to `state/script-id`)
 
 ### Before each demo take (including the first)
 
@@ -94,7 +94,7 @@ Review the generated ES|QL — it uses `COUNT_IF` in a single `STATS` pass, grou
 
 On the **Actions** tab, before saving: add the Workflow as a rule action.
 
-- **Workflow ID:** `cat state/workflow-id`
+- Select **Okta Credential Stuffing Response** from the Workflow picker
 - **`script_id` input:** `cat state/script-id` (uploaded automatically by `configure.sh`)
 - **`endpoint_id` input:** leave as-is — `terraform apply` pre-populated it with the enrolled agent's ID
 
@@ -117,6 +117,21 @@ Open Security → Cases. The Workflow fired when the alert was created and ran s
 7. Added a remediation summary comment and closed the case.
 
 Walk the case timeline: created → in-progress → observables → AI analysis → remediation → closed. The pitch: one alert, a consistent automated response every time — no manual RDP or ad-hoc scripting required.
+
+## Optional: building a richer alert queue
+
+For a more compelling "scale" story, seed additional attack scenarios before the demo:
+
+```bash
+./scripts/add-attack-scenario.sh   # adds one new attacker IP + victim
+./scripts/add-attack-scenario.sh   # add another, and so on
+```
+
+Each run picks the next IP/victim from a rotation pool. Each new scenario fires the detection rule and triggers the Workflow, which remediates and acknowledges the alert automatically.
+
+**What to show in Kibana:** Security → Alerts → change the **Status** filter to **Acknowledged** (or **All**). You'll see a queue of multiple attackers, each already remediated — demonstrating that the automated response runs consistently across every alert, not just the first one.
+
+The original `jsmith@example.com` alert stays **Open** (it was seeded before the Workflow was attached to the rule), giving you a clean before/after contrast: one unprocessed alert vs. a queue of auto-closed ones.
 
 ## Cleanup
 

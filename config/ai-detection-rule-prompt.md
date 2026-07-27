@@ -30,7 +30,7 @@ If the AI-generated rule omits this, add it manually in the MITRE ATT&CK mapping
 
 ## Checklist
 
-Run `demo/seed-password-spray-data.sh` (or the requests in `demo/create-sample-data.http`) **before** starting this checklist — the rule preview step below needs live data indexed to validate against, not an empty result set.
+Run `scripts/seed-password-spray-data.sh` (or the requests in `scripts/create-sample-data.http`) **before** starting this checklist — the rule preview step below needs live data indexed to validate against, not an empty result set.
 
 1. Paste the prompt above into AI rule creation.
 2. Review the generated ES|QL query — confirm it aggregates `BY source.ip` with `COUNT_DISTINCT(user.name)` as the primary signal (not just `COUNT(*)`), and filters on `event.category == "authentication" AND event.outcome == "failure"`.
@@ -43,7 +43,7 @@ Run `demo/seed-password-spray-data.sh` (or the requests in `demo/create-sample-d
 
 ## Expected result (for reference in the rule preview, and later in the alert)
 
-Seeded via `demo/create-sample-data.http`:
+Seeded via `scripts/create-sample-data.http`:
 
 | source.ip | distinct_users | failed_attempts | Fires? |
 |---|---|---|---|
