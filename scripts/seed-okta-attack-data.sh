@@ -5,7 +5,7 @@
 # Seeds synthetic Okta system log events demonstrating a credential stuffing
 # and account takeover attack. Idempotent — safe to re-run before every take.
 #
-# Attack chain (grouped by user.name + source.ip):
+# Attack chain (grouped by okta.actor.alternate_id + okta.client.ip):
 #   Stage 1 — credential stuffing: 5 failed logins (INVALID_CREDENTIALS)
 #   Stage 2 — MFA fatigue:         2 MFA push failures
 #   Stage 3 — access:              1 successful login
