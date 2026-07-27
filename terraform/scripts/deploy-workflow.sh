@@ -81,13 +81,23 @@ fi
 
 # =============================================================================
 # STEP 3: Import the workflow (POST to create, then PUT to validate/enable)
-#
-# The workflow resolves the target endpoint dynamically at alert-time via the
-# entity store — no agent ID injection needed here.
 # =============================================================================
 
+# Substitute script ID placeholder if state/script-id already exists
+# (i.e. configure.sh has run before). On first terraform apply the script
+# hasn't been uploaded yet — configure.sh will do a second bind pass later.
+SCRIPT_ID_FILE="${STATE_DIR}/script-id"
+if [[ -f "$SCRIPT_ID_FILE" ]]; then
+    SCRIPT_UUID="$(tr -d '[:space:]' < "$SCRIPT_ID_FILE")"
+    WORKFLOW_YAML="$(sed "s/REPLACE_WITH_SCRIPT_LIBRARY_UUID/${SCRIPT_UUID}/g" "$WORKFLOW_DEF")"
+    log "Script ID ${SCRIPT_UUID} substituted from ${SCRIPT_ID_FILE}"
+else
+    WORKFLOW_YAML="$(cat "$WORKFLOW_DEF")"
+    log "No script ID found yet — placeholder remains (configure.sh will bind it later)."
+fi
+
 log "Creating workflow via POST /api/workflows/workflow..."
-POST_RESPONSE="$(jq -Rs '{"yaml": .}' "$WORKFLOW_DEF" \
+POST_RESPONSE="$(printf '%s' "${WORKFLOW_YAML}" | jq -Rs '{"yaml": .}' \
     | kb_json -X POST "${KIBANA_URL}/api/workflows/workflow" -d @- 2>/dev/null)"
 
 WORKFLOW_ID="$(jq -r '.id // empty' <<<"$POST_RESPONSE" 2>/dev/null || echo "")"
@@ -102,7 +112,7 @@ else
 
     # PUT triggers real schema validation and enables the workflow.
     # POST accepts any YAML silently; PUT returns validationErrors if the schema is wrong.
-    PUT_RESPONSE="$(jq -Rs '{"yaml": .}' "$WORKFLOW_DEF" \
+    PUT_RESPONSE="$(printf '%s' "${WORKFLOW_YAML}" | jq -Rs '{"yaml": .}' \
         | kb_json -X PUT "${KIBANA_URL}/api/workflows/workflow/${WORKFLOW_ID}" -d @- 2>/dev/null)"
 
     VALID="$(jq -r '.valid // "?"' <<<"$PUT_RESPONSE" 2>/dev/null)"
@@ -129,9 +139,6 @@ log "====================================="
 log "Workflow deployment complete"
 log "====================================="
 log "Workflow:      Okta Credential Stuffing Response (${WORKFLOW_ID:-manual import needed})"
-log ""
-log "The workflow resolves the target endpoint at alert-time via the entity store."
-log "No agent ID configuration needed."
 log ""
 log "Next step: when creating the AI detection rule in Kibana, add this"
 log "Workflow as an action so it fires on every alert."
