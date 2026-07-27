@@ -21,8 +21,10 @@
 # This is the intended demo story: multiple attackers, each automatically
 # detected and remediated — a consistent response every time.
 #
-# Usage: ./scripts/add-attack-scenario.sh [attacker_ip victim_email]
-#   e.g. ./scripts/add-attack-scenario.sh 203.0.113.70 tdavis@example.com
+# Usage: ./scripts/add-attack-scenario.sh [attacker_ip [victim_email]]
+#   e.g. ./scripts/add-attack-scenario.sh 203.0.113.70
+# Victim defaults to jsmith@example.com (the only user with an entity store
+# host association, so the Runscript response action always fires).
 
 set -euo pipefail
 
@@ -46,13 +48,18 @@ ES_URL="$(jq -r '.elasticsearch_url' "${ENV_JSON}")"
 ES_USER="$(jq -r '.elastic_username' "${ENV_JSON}")"
 ES_PASS="$(jq -r '.elastic_password' "${ENV_JSON}")"
 
-# Rotation pool — IPs are all TEST-NET-3 (RFC 5737), safe for demos
+# Rotation pool — IPs are all TEST-NET-3 (RFC 5737), safe for demos.
+# Victim is always jsmith@example.com: she is the only user with an Elastic
+# Defend process event in the entity store, so only her attacks produce a
+# resolved host in Workflow step 6 and trigger the Runscript response action.
 ATTACKER_IPS=("203.0.113.67" "203.0.113.68" "203.0.113.69" "203.0.113.70" "203.0.113.71")
-VICTIMS=("tdavis@example.com" "rjohnson@example.com" "kwilliams@example.com" "pmartin@example.com" "slee@example.com")
+VICTIM="jsmith@example.com"
 
 if [[ $# -ge 2 ]]; then
     ATTACKER_IP="$1"
     VICTIM="$2"
+elif [[ $# -ge 1 ]]; then
+    ATTACKER_IP="$1"
 else
     # Pick the next slot by counting existing scenarios for these IPs
     SLOT=0
@@ -68,7 +75,6 @@ else
         SLOT=$(( (i + 1) % ${#ATTACKER_IPS[@]} ))
     done
     ATTACKER_IP="${ATTACKER_IPS[$SLOT]}"
-    VICTIM="${VICTIMS[$SLOT]}"
 fi
 
 minutes_ago() {
@@ -178,4 +184,4 @@ log ""
 log "Scenario added:"
 log "  ${ATTACKER_IP} / ${VICTIM} — full attack chain (FIRES rule)"
 log ""
-log "Run this script again to add another scenario with the next IP/victim in rotation."
+log "Run this script again to add another scenario with the next IP in rotation."

@@ -231,12 +231,15 @@ add() {
 # --------------------------------------------------------------------------
 # 1. Clear previous take's demo events for these two source IPs
 # --------------------------------------------------------------------------
-step "Clearing previous take's demo events (${ATTACKER_IP}, ${BENIGN_IP})"
+step "Clearing previous take's demo events (all demo IPs)"
 
-DELETE_BODY="$(jq -n --arg a "${ATTACKER_IP}" --arg b "${BENIGN_IP}" \
+# Delete the main attacker, the benign IP, and the full rotation pool used by
+# add-attack-scenario.sh so re-running always starts from a completely clean slate.
+DELETE_BODY="$(jq -n \
+    --argjson ips '["203.0.113.66","203.0.113.67","203.0.113.68","203.0.113.69","203.0.113.70","203.0.113.71","198.51.100.20"]' \
     '{query: {bool: {should: [
-        {terms: {"source.ip":      [$a, $b]}},
-        {terms: {"client.ipAddress": [$a, $b]}}
+        {terms: {"source.ip":        $ips}},
+        {terms: {"client.ipAddress": $ips}}
     ], minimum_should_match: 1}}}')"
 DELETE_RESPONSE="$(es_post "/${DATA_STREAM}/_delete_by_query?refresh=true&conflicts=proceed" "${DELETE_BODY}")"
 DELETED="$(jq -r '.deleted // "unknown"' <<<"${DELETE_RESPONSE}" 2>/dev/null || echo "unknown")"
