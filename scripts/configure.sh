@@ -80,6 +80,11 @@ log "Kibana URL:        ${KIBANA_URL}"
 log "Elasticsearch URL: ${ELASTICSEARCH_URL}"
 log "(Credentials read successfully - not printed to stdout/logs.)"
 
+CURL_AUTH_CONF="$(mktemp)"
+chmod 600 "$CURL_AUTH_CONF"
+printf 'user = "%s:%s"\n' "$ELASTIC_USERNAME" "$ELASTIC_PASSWORD" > "$CURL_AUTH_CONF"
+trap 'rm -f "$CURL_AUTH_CONF"' EXIT
+
 # --------------------------------------------------------------------------
 # 2. Write ./shared/env.json (merge, don't clobber unrelated keys)
 # --------------------------------------------------------------------------
@@ -118,7 +123,7 @@ log "Wrote Kibana/Elasticsearch endpoints and credentials to ${ENV_JSON} (mode 6
 step "Verifying Kibana is reachable"
 
 KIBANA_STATUS_CODE="$(curl -s -o /tmp/configure_kibana_status.$$ -w '%{http_code}' \
-    -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    -K "$CURL_AUTH_CONF" \
     -H 'kbn-xsrf: true' \
     "${KIBANA_URL%/}/api/status" || true)"
 
@@ -138,14 +143,14 @@ log "Kibana is reachable and authenticated (HTTP 200 from /api/status)."
 step "Initialising endpoint response-actions data stream"
 
 ACTIONS_DS_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
-    -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    -K "$CURL_AUTH_CONF" \
     "${ELASTICSEARCH_URL%/}/.logs-endpoint.actions-default/_count" || true)"
 
 if [[ "${ACTIONS_DS_STATUS}" == "200" ]]; then
     log ".logs-endpoint.actions-default already exists — skipping."
 else
     HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
-        -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+        -K "$CURL_AUTH_CONF" \
         -H 'Content-Type: application/json' \
         -X PUT "${ELASTICSEARCH_URL%/}/_data_stream/.logs-endpoint.actions-default" || true)"
     if [[ "${HTTP_CODE}" == "200" ]]; then
@@ -156,11 +161,11 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 6. Install the Okta integration package (registers the ingest pipeline)
+# 5. Install the Okta integration package (registers the ingest pipeline)
 # --------------------------------------------------------------------------
 step "Installing Okta integration package"
 
-OKTA_INFO="$(curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+OKTA_INFO="$(curl -s -K "$CURL_AUTH_CONF" \
     -H 'kbn-xsrf: true' \
     "${KIBANA_URL%/}/api/fleet/epm/packages/okta")"
 
@@ -176,7 +181,7 @@ log "Okta integration version: ${OKTA_VERSION} (status: ${OKTA_STATUS})"
 
 if [[ "${OKTA_STATUS}" != "installed" ]]; then
     log "Installing..."
-    INSTALL_RESPONSE="$(curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    INSTALL_RESPONSE="$(curl -s -K "$CURL_AUTH_CONF" \
         -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
         -X POST "${KIBANA_URL%/}/api/fleet/epm/packages/okta/${OKTA_VERSION}" \
         -d '{}')"
@@ -191,7 +196,7 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 7. Poll Fleet for a healthy agent on the demo policy
+# 6. Poll Fleet for a healthy agent on the demo policy
 # --------------------------------------------------------------------------
 step "Waiting for the Elastic Agent to show healthy in Fleet (up to ${FLEET_POLL_TIMEOUT_SECS}s)"
 
@@ -204,7 +209,7 @@ log "Looking for an agent policy matching '*-windows-endpoint-policy'..."
 
 kibana_get() {
     local path="$1"
-    curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" -H 'kbn-xsrf: true' "${KIBANA_URL%/}${path}"
+    curl -s -K "$CURL_AUTH_CONF" -H 'kbn-xsrf: true' "${KIBANA_URL%/}${path}"
 }
 
 POLICY_JSON="$(kibana_get "/api/fleet/agent_policies?perPage=100" \
@@ -242,7 +247,7 @@ fi
 log "Elastic Agent is healthy on policy '${POLICY_NAME}'."
 
 # --------------------------------------------------------------------------
-# 8. Upload remediation script to Elastic Defend Script Library
+# 7. Upload remediation script to Elastic Defend Script Library
 # --------------------------------------------------------------------------
 step "Uploading remediation script to Elastic Defend Script Library"
 
@@ -261,7 +266,7 @@ if [[ -f "${SCRIPT_ID_FILE}" ]]; then
     if [[ -n "${OLD_SCRIPT_ID}" ]]; then
         log "Deleting previous script library entry ${OLD_SCRIPT_ID}..."
         DEL_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
-            -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+            -K "$CURL_AUTH_CONF" \
             -H 'kbn-xsrf: true' \
             -X DELETE \
             "${KIBANA_URL%/}/api/endpoint/scripts_library/${OLD_SCRIPT_ID}" || true)"
@@ -276,7 +281,7 @@ fi
 
 log "Uploading ${REMEDIATION_SCRIPT}..."
 UPLOAD_RESPONSE="$(curl -s \
-    -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    -K "$CURL_AUTH_CONF" \
     -H 'kbn-xsrf: true' \
     -F "name=Okta Compromise Remediation" \
     -F "file=@${REMEDIATION_SCRIPT}" \
@@ -304,25 +309,23 @@ mv "${TMP_ENV_JSON}" "${ENV_JSON}"
 chmod 600 "${ENV_JSON}"
 
 # --------------------------------------------------------------------------
-# 9. Manual steps checklist
+# 8. Manual steps checklist
 # --------------------------------------------------------------------------
 step "Manual steps remaining (not automated by Terraform - see README.md)"
 
 cat <<EOF
 
-  1. Install Elastic Defend on the VM via Kibana Fleet (Fleet > Agents > select
-     the agent > Add integration > Elastic Defend).
-
-  2. Author the AI/ES|QL detection rule using Agent Builder's AI rule creation.
+  1. Author the AI/ES|QL detection rule using Agent Builder's AI rule creation.
      Prompt and MITRE mapping reference: ${CONFIG_DIR}/ai-detection-rule-prompt.md
 
      When saving the rule, add the Workflow deployed by Terraform as a rule action.
      Workflow ID:  $(cat "${REPO_ROOT}/state/workflow-id" 2>/dev/null || echo "(see state/workflow-id after terraform apply)")
      Script ID:    $(cat "${SCRIPT_ID_FILE}" 2>/dev/null || echo "(see state/script-id after configure.sh)")
 
-  3. Run scripts/seed-okta-attack-data.sh to seed Okta telemetry and trigger the demo.
+  2. Run scripts/seed-okta-attack-data.sh to seed Okta telemetry and trigger the demo.
 
-The Workflow and remediation Script are deployed automatically — no manual uploads needed.
+The Workflow, Elastic Defend integration, and remediation Script are all deployed
+automatically — no manual uploads needed.
 
 See README.md for the full demo flow.
 EOF

@@ -80,68 +80,17 @@ if [[ -f "$WORKFLOW_ID_FILE" ]]; then
 fi
 
 # =============================================================================
-# STEP 3: Look up the Windows agent ID from Fleet
-#         (the runscript step needs a concrete agent to target)
-# =============================================================================
-
-log "Looking up Windows agent from Fleet (policy: *-windows-endpoint-policy)..."
-
-AGENT_ID=""
-POLICY_ID=""
-ATTEMPT=0
-MAX_ATTEMPTS=40   # 40 × 15s = 10 minutes
-
-while [[ $ATTEMPT -lt $MAX_ATTEMPTS ]]; do
-    ATTEMPT=$(( ATTEMPT + 1 ))
-
-    # Find the agent policy
-    POLICIES="$(kb "${KIBANA_URL}/api/fleet/agent_policies?perPage=100" 2>/dev/null || echo '{}')"
-    POLICY_ID="$(jq -r '[.items[]? | select(.name | endswith("-windows-endpoint-policy"))][0].id // empty' <<<"$POLICIES")"
-
-    if [[ -n "$POLICY_ID" ]]; then
-        # Find a healthy agent enrolled in that policy
-        KUERY="policy_id:\"${POLICY_ID}\""
-        ENCODED_KUERY="$(jq -rn --arg q "$KUERY" '$q | @uri')"
-        AGENTS="$(kb "${KIBANA_URL}/api/fleet/agents?kuery=${ENCODED_KUERY}" 2>/dev/null || echo '{}')"
-        STATUS="$(jq -r '(.list // .items)[0].status // empty' <<<"$AGENTS")"
-        AGENT_ID="$(jq -r '(.list // .items)[0].id // empty' <<<"$AGENTS")"
-
-        if [[ ("$STATUS" == "online" || "$STATUS" == "healthy") && -n "$AGENT_ID" ]]; then
-            log "  Found agent ${AGENT_ID} (status: ${STATUS})"
-            break
-        fi
-
-        log "  Agent status: ${STATUS:-not enrolled yet} (attempt ${ATTEMPT}/${MAX_ATTEMPTS}, retrying in 15s...)"
-    else
-        log "  Policy not found yet (attempt ${ATTEMPT}/${MAX_ATTEMPTS}, retrying in 15s...)"
-    fi
-
-    sleep 15
-done
-
-if [[ -z "$AGENT_ID" ]]; then
-    warn "No healthy Windows agent found after $(( MAX_ATTEMPTS * 15 ))s."
-    warn "Deploying workflow with windows_agent_id=REPLACE_ME — update the Workflow in Kibana after the agent enrolls."
-    AGENT_ID="REPLACE_ME"
-fi
-
-# =============================================================================
-# STEP 4: Substitute the agent ID into the workflow YAML
-# =============================================================================
-
-log "Injecting windows_agent_id into workflow YAML..."
-WORKFLOW_YAML="$(sed "s|windows_agent_id: \"\"|windows_agent_id: \"${AGENT_ID}\"|" "$WORKFLOW_DEF")"
-
-# =============================================================================
-# STEP 5: Import the workflow (POST to create, then PUT to validate/enable)
+# STEP 3: Import the workflow (POST to create, then PUT to validate/enable)
+#
+# The workflow resolves the target endpoint dynamically at alert-time via the
+# entity store — no agent ID injection needed here.
 # =============================================================================
 
 log "Creating workflow via POST /api/workflows/workflow..."
-POST_RESPONSE="$(echo "$WORKFLOW_YAML" \
-    | python3 -c "import sys,json; print(json.dumps({'yaml': sys.stdin.read()}))" \
+POST_RESPONSE="$(jq -Rs '{"yaml": .}' "$WORKFLOW_DEF" \
     | kb_json -X POST "${KIBANA_URL}/api/workflows/workflow" -d @- 2>/dev/null)"
 
-WORKFLOW_ID="$(echo "$POST_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")"
+WORKFLOW_ID="$(jq -r '.id // empty' <<<"$POST_RESPONSE" 2>/dev/null || echo "")"
 
 if [[ -z "$WORKFLOW_ID" ]]; then
     warn "Could not parse workflow ID from POST response:"
@@ -153,12 +102,11 @@ else
 
     # PUT triggers real schema validation and enables the workflow.
     # POST accepts any YAML silently; PUT returns validationErrors if the schema is wrong.
-    PUT_RESPONSE="$(echo "$WORKFLOW_YAML" \
-        | python3 -c "import sys,json; print(json.dumps({'yaml': sys.stdin.read()}))" \
+    PUT_RESPONSE="$(jq -Rs '{"yaml": .}' "$WORKFLOW_DEF" \
         | kb_json -X PUT "${KIBANA_URL}/api/workflows/workflow/${WORKFLOW_ID}" -d @- 2>/dev/null)"
 
-    VALID="$(echo "$PUT_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('valid','?'))" 2>/dev/null)"
-    ERRORS="$(echo "$PUT_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); errs=d.get('validationErrors',[]); print('\n'.join(errs))" 2>/dev/null)"
+    VALID="$(jq -r '.valid // "?"' <<<"$PUT_RESPONSE" 2>/dev/null)"
+    ERRORS="$(jq -r '.validationErrors[]? // empty' <<<"$PUT_RESPONSE" 2>/dev/null)"
 
     if [[ "$VALID" == "True" ]]; then
         log "Workflow is valid and enabled."
@@ -181,7 +129,9 @@ log "====================================="
 log "Workflow deployment complete"
 log "====================================="
 log "Workflow:      Okta Credential Stuffing Response (${WORKFLOW_ID:-manual import needed})"
-log "Windows agent: ${AGENT_ID}"
+log ""
+log "The workflow resolves the target endpoint at alert-time via the entity store."
+log "No agent ID configuration needed."
 log ""
 log "Next step: when creating the AI detection rule in Kibana, add this"
 log "Workflow as an action so it fires on every alert."

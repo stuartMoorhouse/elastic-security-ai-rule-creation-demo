@@ -11,7 +11,7 @@ variable "prefix" {
 }
 
 variable "my_ip" {
-  description = "Public IP (CIDR) allowed to RDP/SSH into the Windows VM. Leave unset (empty string) to auto-detect the IP of the machine running `terraform apply` via ifconfig.me."
+  description = "Public IP (CIDR) allowed to RDP/SSH into the Windows VM. Leave unset (empty string) to auto-detect the IP of the machine running `terraform apply` via v4.ident.me."
   type        = string
   default     = ""
 }

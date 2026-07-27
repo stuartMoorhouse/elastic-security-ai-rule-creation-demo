@@ -10,7 +10,7 @@ locals {
     org        = "sa"
     team       = "emea-north"
     project    = "stuartmoorhouse"
-    keep-until = "2026-07-22"
+    keep-until = "2027-01-27"
   }
 }
 

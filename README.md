@@ -96,7 +96,6 @@ On the **Actions** tab, before saving: add the Workflow as a rule action.
 
 - Select **Okta Credential Stuffing Response** from the Workflow picker
 - **`script_id` input:** `cat state/script-id` (uploaded automatically by `configure.sh`)
-- **`endpoint_id` input:** leave as-is — `terraform apply` pre-populated it with the enrolled agent's ID
 
 Click **Apply to creation** and enable the rule.
 
@@ -106,17 +105,49 @@ Navigate to Security → Alerts. The rule fires immediately on the seeded data �
 
 ### Step 3: Respond — show the auto-created case
 
-Open Security → Cases. The Workflow fired when the alert was created and ran seven automated steps:
+Open Security → Cases. The Workflow fired when the alert was created and ran ten automated steps:
 
 1. Opened a case — title, description, severity Critical, MITRE tags.
 2. Set status → **in-progress** — signals remediation is underway.
 3. Attached the triggering alert to the case.
 4. Pinned the attacker IP and compromised account as **observables** (IOCs visible in the case header).
 5. Added an **AI analysis comment** (Claude-generated summary of the four-stage attack chain).
-6. Ran `remediate-okta-compromise.ps1` via Runscript — blocked `source.ip` at the Windows Firewall and disabled the local account matching the compromised Okta username.
-7. Added a remediation summary comment and closed the case.
+6. Queried the **entity store** (`entities-latest-default`) to resolve which host `jsmith` is associated with — the entity store links the Okta user entity (built from Okta log events) to the endpoint user entity (built from Elastic Defend process telemetry on jsmith's Windows workstation).
+7. Looked up the **Fleet agent ID** for that host via the Fleet API.
+8. Ran `remediate-okta-compromise.ps1` via Runscript against the dynamically resolved endpoint — blocked `source.ip` at the Windows Firewall and disabled the local account matching the compromised Okta username.
+9. Added a remediation summary comment (includes the resolved hostname).
+10. Closed the case.
 
-Walk the case timeline: created → in-progress → observables → AI analysis → remediation → closed. The pitch: one alert, a consistent automated response every time — no manual RDP or ad-hoc scripting required.
+Walk the case timeline: created → in-progress → observables → AI analysis → entity resolution → remediation → closed. The pitch: the Workflow doesn't need a hardcoded machine name — the entity store provides the bridge between the Okta identity and the Windows workstation, so the same Workflow works regardless of which user or endpoint is involved.
+
+#### Verifying the Runscript actually ran
+
+**In Kibana:** Security → Endpoints → Response Actions History. Find the `run-script` entry for the Windows VM and expand it — the script prints a `=== Response Summary ===` block naming the firewall rule created and the account disabled.
+
+**On the VM (belt-and-braces):** SSH in and run two read-only commands:
+
+```powershell
+# Show the inbound-block firewall rule for the attacker IP
+Get-NetFirewallRule -DisplayName "Elastic-OktaCompromise-Block-*" | Select-Object DisplayName, Enabled, Action
+
+# Show the compromised account is disabled
+Get-LocalUser -Name jsmith | Select-Object Name, Enabled
+```
+
+A matching firewall rule and `Enabled: False` on the account confirm the script ran.
+
+> **If Response Actions History is empty:** the entity store lookup (Step 6) may not have found jsmith's host yet. Check the case's remediation comment — if it says `unknown host`, the entity store hasn't linked jsmith's Okta identity to the Windows endpoint yet. Wait a few minutes for the entity store extraction cycle to run, then re-seed and retry. See [Entity store timing](#entity-store-timing) below.
+
+#### Entity store timing
+
+The entity store runs on a schedule (default: every few minutes). Two sources feed the jsmith entity:
+
+- **Endpoint entity** (user.name + host.id): created from Elastic Defend process telemetry generated when `jsmith` first logged into the Windows VM. This happens automatically during `terraform apply` (the `create-demo-users.ps1` script runs a process as jsmith) and persists indefinitely — no action needed per demo take. Elastic Defend is an EDR agent that captures every process start event on the host, stamping each one with the owning user (`user.name`) and a stable host identifier (`host.id`). The entity store's scheduled extraction reads these process events from the security data view and — when it sees both fields together — creates a user entity record linking jsmith to this specific host. That record is what the Workflow queries in step 6 to find the right endpoint to remediate on, without any hardcoded machine name.
+- **Okta user entity** (user.email): created from the seeded Okta log events. This is re-seeded by `prepare-and-reset-demo.sh` and will appear in the entity store within a few minutes of seeding.
+
+For a live demo, seed the Okta data at least **5 minutes before** showing the alert to give the entity store time to extract the Okta user entity and link it to the endpoint entity via entity resolution. Seeding at the start of your setup time (before the narrative begins) is the safest approach.
+
+To verify the entity store has the association before the demo: Security → Entity analytics → search for `jsmith`. The user entity should show both the Okta source and the host association.
 
 ## Optional: building a richer alert queue
 

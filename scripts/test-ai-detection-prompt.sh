@@ -13,7 +13,7 @@
 # Method: send the prompt to the same class of LLM connector Agent Builder
 # would use (via Kibana's connector _execute API), extract the ES|QL it
 # returns, run that query against the real seeded data (via Elasticsearch's
-# _query API), and grade the result against scripts/seed-password-spray-data.sh's
+# _query API), and grade the result against scripts/seed-okta-attack-data.sh's
 # expected outcome. Repeat N times; report the pass rate. If the base prompt
 # (as currently documented) doesn't clear the target pass rate, try
 # progressively more explicit fallback variants and report which one (if any)
@@ -219,7 +219,7 @@ grade_query() {
 # clears THRESHOLD (or we run out of variants).
 # --------------------------------------------------------------------------
 step "Seeding fresh password-spray telemetry"
-"${REPO_ROOT}/scripts/seed-password-spray-data.sh"
+"${REPO_ROOT}/scripts/seed-okta-attack-data.sh"
 
 log ""
 log "Connector under test: ${CONNECTOR_ID}"

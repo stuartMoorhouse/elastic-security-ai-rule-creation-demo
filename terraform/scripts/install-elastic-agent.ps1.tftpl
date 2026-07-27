@@ -22,12 +22,3 @@ if (-not ($svc -and $svc.Status -eq "Running")) {
 
     & .\elastic-agent.exe install --url="$fleetUrl" --enrollment-token="$enrollmentToken" --non-interactive --force
 }
-
-# Create a demo local account that matches the compromised Okta username (jsmith@example.com → jsmith).
-# The remediate-okta-compromise.ps1 runscript disables this account as part of the automated response.
-$demoUser = "jsmith"
-if (-not (Get-LocalUser -Name $demoUser -ErrorAction SilentlyContinue)) {
-    $pwd = ConvertTo-SecureString "DemoUser@2024!" -AsPlainText -Force
-    New-LocalUser -Name $demoUser -Password $pwd -FullName "John Smith (demo)" -Description "Demo account for Okta compromise demo"
-    Add-LocalGroupMember -Group "Users" -Member $demoUser
-}

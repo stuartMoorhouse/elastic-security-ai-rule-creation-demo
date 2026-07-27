@@ -52,6 +52,7 @@ locals {
       enrollment_token = local.enrollment_token
     }),
     file("${path.module}/scripts/install-openssh.ps1"),
+    file("${path.module}/scripts/create-demo-users.ps1"),
   ])
 
   # PowerShell's -EncodedCommand expects Base64 of UTF-16LE, not UTF-8 —
