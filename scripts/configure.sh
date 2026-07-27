@@ -350,7 +350,9 @@ cat <<EOF
      Workflow ID:  $(cat "${REPO_ROOT}/state/workflow-id" 2>/dev/null || echo "(see state/workflow-id after terraform apply)")
      The script_id input is pre-filled automatically — no manual entry needed.
 
-  2. Run scripts/seed-okta-attack-data.sh to seed Okta telemetry and trigger the demo.
+  2. Run scripts/prepare-and-reset-demo.sh to seed fresh Okta attack telemetry.
+     Then run scripts/add-attack-scenario.sh to add a new attacker scenario —
+     this fires the Workflow and demonstrates automated case management.
 
 The Workflow, Elastic Defend integration, script library upload, and script ID
 binding are all automated — no manual copy/paste needed.
