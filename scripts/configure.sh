@@ -309,7 +309,35 @@ mv "${TMP_ENV_JSON}" "${ENV_JSON}"
 chmod 600 "${ENV_JSON}"
 
 # --------------------------------------------------------------------------
-# 8. Manual steps checklist
+# 8. Bind script ID into the deployed workflow
+# --------------------------------------------------------------------------
+step "Binding script ID into workflow"
+
+WORKFLOW_ID_FILE="${STATE_DIR}/workflow-id"
+WORKFLOW_DEF="${REPO_ROOT}/terraform/workflows/okta-credential-stuffing.yaml"
+
+if [[ ! -f "${WORKFLOW_ID_FILE}" ]]; then
+    log "Warning: ${WORKFLOW_ID_FILE} not found — skipping workflow update."
+    log "Re-run 'terraform apply' to deploy the workflow, then re-run configure.sh."
+else
+    WORKFLOW_ID="$(tr -d '[:space:]' < "${WORKFLOW_ID_FILE}")"
+    UPDATED_YAML="$(sed "s/REPLACE_WITH_SCRIPT_LIBRARY_UUID/${SCRIPT_ID}/g" "${WORKFLOW_DEF}")"
+
+    UPDATE_RESPONSE="$(printf '%s' "${UPDATED_YAML}" | jq -Rs '{"yaml": .}' | \
+        curl -s -K "$CURL_AUTH_CONF" \
+        -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+        -X PUT "${KIBANA_URL%/}/api/workflows/workflow/${WORKFLOW_ID}" \
+        -d @- 2>/dev/null)"
+
+    if jq -e '.id // empty' <<<"${UPDATE_RESPONSE}" >/dev/null 2>&1; then
+        log "Workflow ${WORKFLOW_ID} updated — script_id default is now ${SCRIPT_ID}."
+    else
+        log "Warning: workflow update may have failed. Response: ${UPDATE_RESPONSE}"
+    fi
+fi
+
+# --------------------------------------------------------------------------
+# 9. Manual steps checklist
 # --------------------------------------------------------------------------
 step "Manual steps remaining (not automated by Terraform - see README.md)"
 
@@ -320,12 +348,12 @@ cat <<EOF
 
      When saving the rule, add the Workflow deployed by Terraform as a rule action.
      Workflow ID:  $(cat "${REPO_ROOT}/state/workflow-id" 2>/dev/null || echo "(see state/workflow-id after terraform apply)")
-     Script ID:    $(cat "${SCRIPT_ID_FILE}" 2>/dev/null || echo "(see state/script-id after configure.sh)")
+     The script_id input is pre-filled automatically — no manual entry needed.
 
   2. Run scripts/seed-okta-attack-data.sh to seed Okta telemetry and trigger the demo.
 
-The Workflow, Elastic Defend integration, and remediation Script are all deployed
-automatically — no manual uploads needed.
+The Workflow, Elastic Defend integration, script library upload, and script ID
+binding are all automated — no manual copy/paste needed.
 
 See README.md for the full demo flow.
 EOF

@@ -92,10 +92,7 @@ Paste this prompt:
 
 Review the generated ES|QL — it uses `COUNT_IF` in a single `STATS` pass, grouped by `user.name` and `source.ip`. Optionally refine. Review the MITRE mapping. Click **Preview rule results** — `jsmith@example.com` should appear (all four stages); `bjones`, `alee`, and `mwilson` should not.
 
-On the **Actions** tab, before saving: add the Workflow as a rule action.
-
-- Select **Okta Credential Stuffing Response** from the Workflow picker
-- **`script_id` input:** `cat state/script-id` (uploaded automatically by `configure.sh`)
+On the **Actions** tab, before saving: add the Workflow as a rule action — select **Okta Credential Stuffing Response** from the Workflow picker. The `script_id` input is pre-filled automatically by `configure.sh`.
 
 Click **Apply to creation** and enable the rule.
 
