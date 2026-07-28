@@ -38,7 +38,7 @@ terraform -chdir=terraform apply
 - Provisions the Azure Windows VM, VNet, NSG, public IP
 - Installs and enrolls the Elastic Agent on the VM
 - Deploys the **Okta Credential Stuffing Response** workflow to Kibana
-- Runs `scripts/configure.sh` — writes `shared/env.json`, creates the endpoint response-actions data stream, installs the Okta Fleet integration, waits for the agent to show healthy in Fleet, and uploads `scripts/remediate-okta-compromise.ps1` to the Script library (saving its UUID to `state/script-id`)
+- Runs `scripts/configure.sh` — writes `shared/env.json`, creates the endpoint response-actions data stream, installs the Okta Fleet integration, waits for the agent to show healthy in Fleet, uploads `scripts/remediate-okta-compromise.ps1` to the Script library (saving its UUID to `state/script-id`), and updates the deployed Workflow with that UUID so the `script_id` input is pre-filled
 
 ### Before each demo take (including the first)
 
@@ -146,7 +146,7 @@ For a more compelling "scale" story, seed additional attack scenarios before the
 ./scripts/add-attack-scenario.sh   # add another, and so on
 ```
 
-Each run picks the next attacker IP from a rotation pool; the victim is always `jsmith@example.com`. Using the same victim matters: she is the only account with an Elastic Defend process event in the entity store, so the Workflow can resolve her workstation and the Runscript response action actually fires. Each new scenario triggers the detection rule and the Workflow, which remediates and acknowledges the alert automatically.
+Each run picks the next attacker IP from a rotation pool; the victim is always `jsmith@example.com`. Using the same victim matters: the remediation script strips the email domain to get the local Windows account name (`jsmith@example.com` → `jsmith`), and `jsmith` is the only demo account that exists on the VM — a different victim email would cause `Disable-LocalUser` to fail. The Workflow locates the endpoint via Fleet and the Runscript fires regardless of victim identity. Each new scenario triggers the detection rule and the Workflow, which remediates and acknowledges the alert automatically.
 
 **What to show in Kibana:** Security → Alerts → change the **Status** filter to **Acknowledged** (or **All**). You'll see a queue of multiple attackers, each already remediated — demonstrating that the automated response runs consistently across every alert, not just the first one.
 
