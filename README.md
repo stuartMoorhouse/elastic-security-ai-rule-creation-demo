@@ -123,14 +123,17 @@ Walk the case timeline: created → in-progress → observables → AI analysis 
 **On the VM (belt-and-braces):** SSH in and run two read-only commands:
 
 ```powershell
-# Show the inbound-block firewall rule for the attacker IP
-Get-NetFirewallRule -DisplayName "Elastic-OktaCompromise-Block-*" | Select-Object DisplayName, Enabled, Action
+# Show the firewall rule and the specific IP it blocks
+Get-NetFirewallRule -DisplayName "Elastic-OktaCompromise-Block-*" |
+  ForEach-Object { $_ | Get-NetFirewallAddressFilter |
+    Select-Object @{n='Rule';e={$_.InstanceID}}, RemoteAddress } |
+  Format-Table -AutoSize
 
 # Show the compromised account is disabled
 Get-LocalUser -Name jsmith | Select-Object Name, Enabled
 ```
 
-A matching firewall rule and `Enabled: False` on the account confirm the script ran.
+The first command shows the exact attacker IP embedded in the rule, proving the dynamic value was passed correctly from the alert. A matching IP and `Enabled: False` on the account confirm the script ran end-to-end.
 
 > **If Response Actions History is empty:** check that the Elastic Agent on the Windows VM is showing as **Online** in Fleet (Security → Fleet → Agents). If the agent is offline or unhealthy, the Runscript action queues but cannot execute. The remediation comment in the case will still show the hostname if the Fleet lookup succeeded.
 
