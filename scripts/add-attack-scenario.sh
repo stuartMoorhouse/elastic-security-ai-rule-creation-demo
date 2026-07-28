@@ -23,8 +23,9 @@
 #
 # Usage: ./scripts/add-attack-scenario.sh [attacker_ip [victim_email]]
 #   e.g. ./scripts/add-attack-scenario.sh 203.0.113.70
-# Victim defaults to jsmith@example.com (the only user with an entity store
-# host association, so the Runscript response action always fires).
+# Victim defaults to jsmith@example.com — the remediation script strips the
+# email domain to get the local Windows account name, and jsmith is the only
+# demo account that exists on the VM.
 
 set -euo pipefail
 
@@ -49,9 +50,8 @@ ES_USER="$(jq -r '.elastic_username' "${ENV_JSON}")"
 ES_PASS="$(jq -r '.elastic_password' "${ENV_JSON}")"
 
 # Rotation pool — IPs are all TEST-NET-3 (RFC 5737), safe for demos.
-# Victim is always jsmith@example.com: she is the only user with an Elastic
-# Defend process event in the entity store, so only her attacks produce a
-# resolved host in Workflow step 6 and trigger the Runscript response action.
+# Victim is always jsmith@example.com: the remediation script maps email prefix
+# to local Windows account name, and jsmith is the only demo account on the VM.
 ATTACKER_IPS=("203.0.113.67" "203.0.113.68" "203.0.113.69" "203.0.113.70" "203.0.113.71")
 VICTIM="jsmith@example.com"
 
@@ -169,10 +169,10 @@ add "$(minutes_ago 2)" "user.authentication.usernamepassword" "failure" "$ATTACK
 # Stage 2: MFA fatigue
 add "$(minutes_ago 2)" "user.authentication.auth_via_mfa" "failure" "$ATTACKER_IP" "$VICTIM" "FACTOR_CHALLENGE_TIMEOUT"
 add "$(minutes_ago 2)" "user.authentication.auth_via_mfa" "failure" "$ATTACKER_IP" "$VICTIM" "FACTOR_CHALLENGE_TIMEOUT"
-# Stage 3: successful login — both event types
-add "$(minutes_ago 1)" "user.session.start"               "success" "$ATTACKER_IP" "$VICTIM"
-add "$(minutes_ago 1)" "user.authentication.usernamepassword" "success" "$ATTACKER_IP" "$VICTIM"
-# Stage 4: post-compromise
+# Stage 3: successful login — both event types (2 min ago so post-compromise is strictly later)
+add "$(minutes_ago 2)" "user.session.start"               "success" "$ATTACKER_IP" "$VICTIM"
+add "$(minutes_ago 2)" "user.authentication.usernamepassword" "success" "$ATTACKER_IP" "$VICTIM"
+# Stage 4: post-compromise (1 min ago — strictly after Stage 3 for temporal ordering rules)
 add "$(minutes_ago 1)" "user.account.privilege.grant"     "success" "$ATTACKER_IP" "$VICTIM"
 
 RESPONSE="$(es_post "/${DATA_STREAM}/_bulk?refresh=true" "${BULK}")"

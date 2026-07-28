@@ -88,9 +88,9 @@ In Kibana: Security → Rules → Create new rule → **AI rule creation**.
 
 Paste this prompt:
 
-> *Find likely Okta account-takeover cases. For each user and source IP, flag the pair when all of these occur: at least 3 failed logins due to invalid credentials, at least one MFA failure, at least one successful login, and at least one post-compromise action — being added to a group or application, being granted account privileges, a sign-on or policy change, or a profile update. Return the user, source IP, a count for each of those four categories, and the first and last timestamps seen, sorted by failed-login count descending.*
+> *Within a 24-hour window, for each Okta actor and client IP: count sign-on failures with reason INVALID_CREDENTIALS, failed MFA challenges including push denials, successful sign-ons, and successful post-compromise actions where the actor is the one performing the action. Post-compromise means group membership add, application assignment, privilege grant, MFA factor enrolment, a change to a policy or policy rule (a modification, not an evaluation), or a profile update — explicitly excluding password changes. Require the post-compromise action to occur after the first successful sign-on.*
 
-Review the generated ES|QL — it uses `COUNT_IF` in a single `STATS` pass, grouped by `user.name` and `source.ip`. Optionally refine. Review the MITRE mapping. Click **Preview rule results** — `jsmith@example.com` should appear (all four stages); `bjones`, `alee`, and `mwilson` should not.
+Review the generated ES|QL — it should aggregate by `user.name` and `source.ip`, use `MIN(@timestamp)` with per-condition filters to capture the first success and first post-compromise timestamps, and enforce the temporal ordering in the `WHERE` clause. Optionally refine. Review the MITRE mapping. Click **Preview rule results** — `jsmith@example.com` should appear (all four stages); `bjones`, `alee`, and `mwilson` should not.
 
 On the **Actions** tab, before saving: add the Workflow as a rule action — select **Okta Credential Stuffing Response** from the Workflow picker. The `script_id` input is pre-filled automatically by `configure.sh`.
 
