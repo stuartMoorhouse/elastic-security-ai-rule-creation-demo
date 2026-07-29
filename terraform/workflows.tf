@@ -9,7 +9,10 @@
 # teardown. On destroy, the workflow is deleted from Kibana.
 
 resource "terraform_data" "workflow" {
-  depends_on = [azurerm_virtual_machine_extension.elastic_agent]
+  depends_on = [
+    azurerm_virtual_machine_extension.elastic_agent,
+    data.external.system_integration,
+  ]
 
   input = {
     kibana_url = ec_deployment.main.kibana.https_endpoint
