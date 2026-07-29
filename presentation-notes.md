@@ -503,25 +503,49 @@ steps:
       # steps.ai_analysis.output.content holds the model's text response.
 
   # ---------------------------------------------------------------------------
-  # STEP 6 — Locate the enrolled Windows endpoint via Fleet
+  # STEP 6 — Resolve which endpoint the compromised user is associated with
+  #           via the Elastic Entity Store
+  # ---------------------------------------------------------------------------
+  - name: find_jsmith_entity
+    type: kibana.request
+    with:
+      method: POST
+      path: '/api/console/proxy?path=%2F.entities.v2.latest.security_default-00001%2F_search&method=POST'
+      body:
+        size: 1
+        _source:
+          - host.name
+          - entity.name
+        query:
+          bool:
+            must:
+              - term:
+                  user.name: "{{ event.alerts[0].okta.actor.alternate_id | split: '@' | first }}"
+              - exists:
+                  field: host.name
+      # The entity store v2 index is auto-initialised by Elastic Security 9.x.
+      # It correlates identities across data sources. Here it maps the Okta actor
+      # email (jsmith@example.com → jsmith) to the Windows host that user last
+      # interactively logged into, populated via Windows Security event 4624.
+      #
+      # | split: '@' | first is Liquid for "strip the domain from the email address".
+      #
+      # The response is available as steps.find_jsmith_entity.output.
+      # steps.find_jsmith_entity.output.hits.hits[0]._source.host.name is the hostname.
+
+  # ---------------------------------------------------------------------------
+  # STEP 6b — Resolve the Fleet agent ID for the host from the entity store
   # ---------------------------------------------------------------------------
   - name: find_agent
     type: kibana.request
     with:
       method: GET
-      path: '/api/fleet/agents?perPage=1&kuery=local_metadata.os.platform:"windows" AND status:online'
-      # kibana.request makes a raw HTTP call to any Kibana API endpoint.
-      # The Fleet API is used here because the alert's Okta identity (actor email)
-      # does not directly tell us the Elastic Agent ID. We bridge the gap by
-      # looking up the first online Windows agent — in this demo there is exactly one.
+      path: '/api/fleet/agents?perPage=1&kuery=local_metadata.host.hostname%3A%22{{ steps.find_jsmith_entity.output.hits.hits[0]._source.host.name }}%22%20AND%20status%3Aonline'
+      # Uses the hostname resolved in step 6 to look up the specific Fleet agent
+      # rather than blindly picking the first Windows agent. The hostname is
+      # URL-encoded in the kuery parameter (%3A = :, %22 = ").
       #
-      # In a production environment: correlate the Okta username with an asset
-      # inventory lookup, or use identity enrichment to find the specific host
-      # the user was logged into at the time of the post-compromise action.
-      #
-      # The response is available as steps.find_agent.output.
       # steps.find_agent.output.items[0].id is the agent UUID needed for run_script.
-      # steps.find_agent.output.items[0].local_metadata.host.hostname is the display name.
 
   # ---------------------------------------------------------------------------
   # STEP 7 — Run the remediation script against the resolved endpoint
@@ -561,7 +585,7 @@ steps:
       comment: |
         ## Automated Remediation Complete
 
-        `remediate-okta-compromise.ps1` ran against `{{ steps.find_agent.output.items[0].local_metadata.host.hostname | default: 'unknown host' }}`:
+        `remediate-okta-compromise.ps1` ran against `{{ steps.find_jsmith_entity.output.hits.hits[0]._source.host.name | default: 'unknown host' }}`:
 
         - Blocked `{{ event.alerts[0].okta.client.ip }}` at the Windows Firewall
         - Disabled local account `{{ event.alerts[0].okta.actor.alternate_id | split: '@' | first }}`
@@ -871,12 +895,14 @@ the rule's field references would not resolve.
 
 **Q: How does the Workflow know which endpoint to run the script on?**
 
-In this demo it queries Fleet for the first online Windows agent: `GET /api/fleet/agents?perPage=1
-&kuery=local_metadata.os.platform:"windows" AND status:online`. That works for a single-endpoint
-demo environment. In production, the mapping from Okta user to endpoint is the hard part: you'd
-query an asset inventory (CMDB, AD, EDR) for the host the user last logged into, or use Elastic's
-Entity Analytics to correlate the Okta identity with an endpoint agent. The Workflow's
-`kibana.request` step can call any API — the pattern is the same.
+It uses the Elastic Entity Store — a built-in feature of Elastic Security 9.x that correlates
+identities across data sources. The `find_jsmith_entity` step queries the entity store v2 index
+for the Windows host associated with the Okta actor's username (derived by stripping the domain
+from the email address). The entity store populates the `host.name` field once the Windows System
+integration has collected interactive logon events (Windows Security event 4624) for that user.
+A second step (`find_agent`) then looks up the Fleet agent ID for that specific hostname. This
+avoids the naive approach of picking the first Windows agent and instead pinpoints the exact
+endpoint the identity was active on.
 
 **Q: What if the Windows agent is offline when the Workflow runs?**
 
