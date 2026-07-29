@@ -135,20 +135,55 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 3. Re-seed Okta attack telemetry for the next take
+# 3. Delete the Okta detection rule (so it is re-authored fresh next take)
+# --------------------------------------------------------------------------
+step "Deleting the Okta detection rule (if it exists)"
+
+# Matches any rule whose name contains "okta" (case-insensitive). In this demo
+# environment that is always the AI-generated credential-stuffing rule.
+RULES_RESPONSE="$(kibana_get "/api/detection_engine/rules/_find?per_page=100")"
+
+if ! jq -e . >/dev/null 2>&1 <<<"${RULES_RESPONSE}"; then
+    err "Unexpected response from detection rules API: ${RULES_RESPONSE}"
+    exit 1
+fi
+
+OKTA_RULES="$(jq -c '[.data[]? | select(.name | ascii_downcase | contains("okta")) | {id: .id, name: .name}]' <<<"${RULES_RESPONSE}")"
+OKTA_RULE_COUNT="$(jq 'length' <<<"${OKTA_RULES}")"
+
+if [[ "${OKTA_RULE_COUNT}" -eq 0 ]]; then
+    log "No Okta detection rule found (nothing to delete)."
+else
+    jq -r '.[] | "\(.id)\t\(.name)"' <<<"${OKTA_RULES}" | while IFS=$'\t' read -r RULE_ID RULE_NAME; do
+        log "Deleting rule: \"${RULE_NAME}\" (${RULE_ID})..."
+        DEL_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+            -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+            -H 'kbn-xsrf: true' \
+            -X DELETE \
+            "${KIBANA_URL%/}/api/detection_engine/rules?id=${RULE_ID}")"
+        if [[ "${DEL_CODE}" == "200" ]]; then
+            log "  Deleted."
+        else
+            log "  Warning: delete returned HTTP ${DEL_CODE}."
+        fi
+    done
+fi
+
+# --------------------------------------------------------------------------
+# 4. Re-seed Okta attack telemetry for the next take
 # --------------------------------------------------------------------------
 step "Seeding fresh Okta attack telemetry"
 
 bash "${REPO_ROOT}/scripts/seed-okta-attack-data.sh"
 
 # --------------------------------------------------------------------------
-# 4. Next-take checklist
+# 5. Next-take checklist
 # --------------------------------------------------------------------------
 step "Reset complete"
 
 cat <<EOF
 
-  Alerts, cases, and Okta telemetry have been reset.
+  Alerts, cases, Okta telemetry, and the detection rule have been reset.
 
   One optional manual step:
   - If the previous take's firewall block rule is still on the endpoint,
