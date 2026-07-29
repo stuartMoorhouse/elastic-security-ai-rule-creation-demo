@@ -506,7 +506,7 @@ steps:
   # STEP 6 — Resolve which endpoint the compromised user is associated with
   #           via the Elastic Entity Store
   # ---------------------------------------------------------------------------
-  - name: find_jsmith_entity
+  - name: find_user_entity
     type: kibana.request
     with:
       method: POST
@@ -530,8 +530,8 @@ steps:
       #
       # | split: '@' | first is Liquid for "strip the domain from the email address".
       #
-      # The response is available as steps.find_jsmith_entity.output.
-      # steps.find_jsmith_entity.output.hits.hits[0]._source.host.name is the hostname.
+      # The response is available as steps.find_user_entity.output.
+      # steps.find_user_entity.output.hits.hits[0]._source.host.name is the hostname.
 
   # ---------------------------------------------------------------------------
   # STEP 6b — Resolve the Fleet agent ID for the host from the entity store
@@ -540,7 +540,7 @@ steps:
     type: kibana.request
     with:
       method: GET
-      path: '/api/fleet/agents?perPage=1&kuery=local_metadata.host.hostname%3A%22{{ steps.find_jsmith_entity.output.hits.hits[0]._source.host.name }}%22%20AND%20status%3Aonline'
+      path: '/api/fleet/agents?perPage=1&kuery=local_metadata.host.hostname%3A%22{{ steps.find_user_entity.output.hits.hits[0]._source.host.name }}%22%20AND%20status%3Aonline'
       # Uses the hostname resolved in step 6 to look up the specific Fleet agent
       # rather than blindly picking the first Windows agent. The hostname is
       # URL-encoded in the kuery parameter (%3A = :, %22 = ").
@@ -585,7 +585,7 @@ steps:
       comment: |
         ## Automated Remediation Complete
 
-        `remediate-okta-compromise.ps1` ran against `{{ steps.find_jsmith_entity.output.hits.hits[0]._source.host.name | default: 'unknown host' }}`:
+        `remediate-okta-compromise.ps1` ran against `{{ steps.find_user_entity.output.hits.hits[0]._source.host.name | default: 'unknown host' }}`:
 
         - Blocked `{{ event.alerts[0].okta.client.ip }}` at the Windows Firewall
         - Disabled local account `{{ event.alerts[0].okta.actor.alternate_id | split: '@' | first }}`
@@ -896,7 +896,7 @@ the rule's field references would not resolve.
 **Q: How does the Workflow know which endpoint to run the script on?**
 
 It uses the Elastic Entity Store — a built-in feature of Elastic Security 9.x that correlates
-identities across data sources. The `find_jsmith_entity` step queries the entity store v2 index
+identities across data sources. The `find_user_entity` step queries the entity store v2 index
 for the Windows host associated with the Okta actor's username (derived by stripping the domain
 from the email address). The entity store populates the `host.name` field once the Windows System
 integration has collected interactive logon events (Windows Security event 4624) for that user.
