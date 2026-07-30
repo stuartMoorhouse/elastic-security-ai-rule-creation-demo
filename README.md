@@ -88,7 +88,12 @@ In Kibana: Security → Rules → Create new rule → **AI rule creation**.
 
 Paste this prompt:
 
-> *Within a 24-hour window, for each Okta actor and client IP: count sign-on failures with reason INVALID_CREDENTIALS, failed MFA challenges including push denials, successful sign-ons, and successful post-compromise actions where the actor is the one performing the action. Post-compromise means group membership add, application assignment, privilege grant, MFA factor enrolment, a change to a policy or policy rule (a modification, not an evaluation), or a profile update — explicitly excluding password changes. Require the post-compromise action to occur after the first successful sign-on.*
+> *Within a 24-hour window, for each Okta actor and client IP: count sign-on failures with reason INVALID_CREDENTIALS, failed MFA challenges including push denials, successful sign-ons, and successful post-compromise actions where the actor is the one performing the action. Post-compromise means group membership add, application assignment, privilege grant, MFA factor enrolment, a change to a policy or policy rule (a modification, not an evaluation), or a profile update — explicitly excluding password changes. Require the post-compromise action to occur after the first successful sign-on.
+ Before writing any field names, call the Elasticsearch GET API on 
+   logs-okta.system-default/_mapping and use only field paths that exist in the 
+   response. Do not use any field name that is not present in the mapping.
+
+*
 
 Review the generated ES|QL — it should aggregate by `user.name` and `source.ip`, use `MIN(@timestamp)` with per-condition filters to capture the first success and first post-compromise timestamps, and enforce the temporal ordering in the `WHERE` clause. Optionally refine. Review the MITRE mapping. Click **Preview rule results** — `jsmith@example.com` should appear (all four stages); `bjones`, `alee`, and `mwilson` should not.
 

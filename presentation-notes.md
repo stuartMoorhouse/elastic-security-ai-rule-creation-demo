@@ -88,17 +88,18 @@ not days earlier when the legitimate user was active.
 The Elastic Okta integration ships system log events into the data stream `logs-okta.system-default`.
 The integration's ingest pipeline maps Okta's native fields to ECS (Elastic Common Schema):
 
-| Okta native field | ECS field | What it contains |
-|---|---|---|
-| `actor.alternateId` | `user.name` | User's email address |
-| `client.ipAddress` | `source.ip` | Source IP of the authentication attempt |
-| `eventType` | `event.action` | The action that occurred (e.g. `user.session.start`) |
-| `outcome.result` | `event.outcome` | `success` or `failure` |
-| `outcome.reason` | `okta.outcome.reason` | Failure reason (e.g. `INVALID_CREDENTIALS`) |
+| Okta native field | Indexed as (Okta-native) | Indexed as (ECS) | What it contains |
+|---|---|---|---|
+| `actor.alternateId` | `okta.actor.alternate_id` | `user.name` | User's email address |
+| `client.ipAddress` | `okta.client.ip` | `source.ip` | Source IP of the authentication attempt |
+| `eventType` | `okta.event_type` | `event.action` | The action that occurred (e.g. `user.session.start`) |
+| `outcome.result` | `okta.outcome.result` | `event.outcome` | `SUCCESS` / `FAILURE` (Okta) or `success` / `failure` (ECS) |
+| `outcome.reason` | `okta.outcome.reason` | — | Failure reason (e.g. `INVALID_CREDENTIALS`) |
 
-Both the ECS fields and some Okta-native fields (`okta.client.ip`, `okta.actor.alternate_id`) are
-available in the index — which field the AI-generated rule uses depends on the model's training,
-which is why the prompt specifies "Okta actor" and "client IP" rather than ECS names.
+Both field sets are available in the index. The AI rule creation agent may use either — which it
+picks depends on the model's training. The Okta-native names (`okta.client.ip`,
+`okta.actor.alternate_id`) are safer to use in the prompt because they match the integration's
+index mapping exactly.
 
 ### Sample Events — What the Four Stages Look Like
 
@@ -114,8 +115,8 @@ appears in the index. Timestamps are relative (minutes before detection).
   "user.name": "jsmith@example.com",
   "source.ip": "203.0.113.66",
   "okta.outcome.reason": "INVALID_CREDENTIALS",
-  "okta.client.ipAddress": "203.0.113.66",
-  "okta.actor.alternateId": "jsmith@example.com"
+  "okta.client.ip": "203.0.113.66",
+  "okta.actor.alternate_id": "jsmith@example.com"
 }
 ```
 
@@ -804,6 +805,17 @@ in natural language and the AI produces a production-quality ES|QL aggregation r
 > to a policy or policy rule (a modification, not an evaluation), or a profile update — explicitly
 > excluding password changes. Require the post-compromise action to occur after the first successful
 > sign-on.*
+
+**Known rough edge — field name hallucination:** The AI rule creation agent does not automatically
+inspect the index mapping before generating ES|QL. It may invent field names that do not exist
+(e.g. `okta.client.ip_address` instead of `okta.client.ip`), which produces a
+`verification_exception: Unknown column` error when the rule preview runs. If this happens,
+add the following sentence to the prompt and regenerate:
+
+> *Use only field names that exist in the `logs-okta.system-default` index mapping — do not invent field names.*
+
+To avoid it entirely, phrase the prompt using Okta-native field names explicitly
+(`okta.actor.alternate_id`, `okta.client.ip`) rather than generic descriptions.
 
 **Before saving:** apply both tuning suggestions the AI offers:
 - Raise `invalid_creds_count >= 1` to `>= 3`
