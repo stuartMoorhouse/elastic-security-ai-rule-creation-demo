@@ -38,27 +38,15 @@ resource "azurerm_windows_virtual_machine" "main" {
 }
 
 locals {
-  # Rendered install script stays lean on purpose: it is embedded directly
-  # into the CustomScriptExtension's commandToExecute (via -EncodedCommand),
-  # so keeping it well under 16KB avoids any risk of hitting Windows/Azure
-  # command-length limits.
-  #
-  # OpenSSH setup is appended rather than run as a second extension —
-  # Windows VMs only support one CustomScriptExtension per handler.
+  # Credentials are NOT embedded in the blob — they are passed as parameters
+  # via commandToExecute (protected_settings, encrypted by Azure at rest).
+  # This keeps the blob content static and avoids command-line length limits.
   install_script_rendered = join("\n", [
-    templatefile("${path.module}/scripts/install-elastic-agent.ps1.tftpl", {
-      elastic_version  = data.ec_stack.latest.version
-      fleet_url        = local.fleet_url
-      enrollment_token = local.enrollment_token
-    }),
+    file("${path.module}/scripts/install-elastic-agent.ps1"),
     file("${path.module}/scripts/install-openssh.ps1"),
     file("${path.module}/scripts/create-demo-users.ps1"),
+    "exit 0",
   ])
-
-  # PowerShell's -EncodedCommand expects Base64 of UTF-16LE, not UTF-8 —
-  # textencodebase64's second argument handles that directly, so no manual
-  # quoting/escaping of the script content is needed at all.
-  install_command = "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${textencodebase64(local.install_script_rendered, "UTF-16LE")}"
 }
 
 resource "azurerm_virtual_machine_extension" "elastic_agent" {
@@ -69,11 +57,12 @@ resource "azurerm_virtual_machine_extension" "elastic_agent" {
   type_handler_version       = "1.10"
   auto_upgrade_minor_version = true
 
-  # commandToExecute carries the enrollment token, so it belongs in
-  # protected_settings (encrypted at rest by Azure, marked sensitive by the
-  # provider) rather than the plaintext `settings` field.
+  # The script is downloaded from private blob storage (fileUris + SAS token);
+  # commandToExecute is short — it only passes the three credential parameters.
+  # Both live in protected_settings (encrypted by Azure) to keep the token secret.
   protected_settings = jsonencode({
-    commandToExecute = local.install_command
+    fileUris         = ["${azurerm_storage_blob.install_script.url}${data.azurerm_storage_account_sas.scripts.sas}"]
+    commandToExecute = "powershell -ExecutionPolicy Bypass -File install.ps1 -ElasticVersion \"${data.ec_stack.latest.version}\" -FleetUrl \"${local.fleet_url}\" -EnrollmentToken \"${local.enrollment_token}\""
   })
 
   # Don't re-run the install script on already-provisioned VMs. The agent is
