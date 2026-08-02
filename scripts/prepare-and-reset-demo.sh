@@ -33,6 +33,9 @@ require_cmd() {
 require_cmd jq
 require_cmd curl
 
+HAS_SSHPASS=false
+command -v sshpass >/dev/null 2>&1 && HAS_SSHPASS=true
+
 # --------------------------------------------------------------------------
 # 0. Load credentials/endpoints from shared/env.json
 # --------------------------------------------------------------------------
@@ -45,6 +48,9 @@ KIBANA_URL="$(jq -r '.kibana_url // empty' "${ENV_JSON}")"
 ELASTIC_USERNAME="$(jq -r '.elastic_username // empty' "${ENV_JSON}")"
 ELASTIC_PASSWORD="$(jq -r '.elastic_password // empty' "${ENV_JSON}")"
 INFRA_READY="$(jq -r '.infra_ready // false' "${ENV_JSON}")"
+VM_PUBLIC_IP="$(jq -r '.vm_public_ip // empty' "${ENV_JSON}")"
+VM_ADMIN_USERNAME="$(jq -r '.vm_admin_username // empty' "${ENV_JSON}")"
+VM_ADMIN_PASSWORD="$(jq -r '.vm_admin_password // empty' "${ENV_JSON}")"
 
 if [[ -z "${KIBANA_URL}" || -z "${ELASTIC_USERNAME}" || -z "${ELASTIC_PASSWORD}" || "${INFRA_READY}" != "true" ]]; then
     err "${ENV_JSON} is missing Kibana credentials/endpoint or infra_ready is not true."
@@ -170,25 +176,62 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 4. Re-seed Okta attack telemetry for the next take
+# 4. Reset the Windows endpoint: remove firewall block rule, re-enable jsmith
+# --------------------------------------------------------------------------
+step "Resetting Windows endpoint (firewall rule + jsmith account)"
+
+MANUAL_RESET_HINT=(
+    "  Remove-NetFirewallRule -DisplayName \"Elastic-OktaCompromise-Block-*\" -ErrorAction SilentlyContinue"
+    "  Enable-LocalUser -Name jsmith -ErrorAction SilentlyContinue"
+)
+
+if [[ -z "${VM_PUBLIC_IP}" || -z "${VM_ADMIN_USERNAME}" || -z "${VM_ADMIN_PASSWORD}" ]]; then
+    log "VM credentials not found in env.json — skipping endpoint reset."
+elif [[ "${HAS_SSHPASS}" != "true" ]]; then
+    log "sshpass not found — skipping automated endpoint reset."
+    log "To reset manually, SSH into ${VM_PUBLIC_IP} and run:"
+    printf '%s\n' "${MANUAL_RESET_HINT[@]}"
+else
+    # Pass the two PowerShell commands as a semicolon-joined one-liner to avoid
+    # multi-line quoting issues across the SSH boundary. The wildcard pattern
+    # Elastic-OktaCompromise-Block-* has no spaces so it needs no quotes in PS.
+    PS_CMD='Remove-NetFirewallRule -DisplayName Elastic-OktaCompromise-Block-* -ErrorAction SilentlyContinue; Enable-LocalUser -Name jsmith -ErrorAction SilentlyContinue; Write-Output endpoint-reset-ok'
+
+    SSH_OUT="$(SSHPASS="${VM_ADMIN_PASSWORD}" sshpass -e ssh \
+        -o StrictHostKeyChecking=no \
+        -o ConnectTimeout=10 \
+        -o BatchMode=no \
+        "${VM_ADMIN_USERNAME}@${VM_PUBLIC_IP}" \
+        "powershell.exe -NoProfile -NonInteractive -Command \"${PS_CMD}\"" 2>&1)" \
+        && SSH_OK=true || SSH_OK=false
+
+    if [[ "${SSH_OK}" == "true" ]] && grep -q "endpoint-reset-ok" <<<"${SSH_OUT}"; then
+        log "Firewall block rule removed and jsmith account re-enabled."
+    else
+        log "Warning: endpoint reset via SSH failed or produced unexpected output."
+        log "Output: ${SSH_OUT}"
+        log "To reset manually, SSH into ${VM_PUBLIC_IP} and run:"
+        printf '%s\n' "${MANUAL_RESET_HINT[@]}"
+    fi
+fi
+
+# --------------------------------------------------------------------------
+# 5. Re-seed Okta attack telemetry for the next take
 # --------------------------------------------------------------------------
 step "Seeding fresh Okta attack telemetry"
 
 bash "${REPO_ROOT}/scripts/seed-okta-attack-data.sh"
 
 # --------------------------------------------------------------------------
-# 5. Next-take checklist
+# 6. Next-take checklist
 # --------------------------------------------------------------------------
 step "Reset complete"
 
 cat <<EOF
 
   Alerts, cases, Okta telemetry, and the detection rule have been reset.
-
-  One optional manual step:
-  - If the previous take's firewall block rule is still on the endpoint,
-    it is harmless to leave in place. Remove via RDP/SSH if desired.
+  The Windows endpoint firewall rule and jsmith account have been restored.
 
 EOF
 
-log "reset-demo.sh completed successfully."
+log "prepare-and-reset-demo.sh completed successfully."

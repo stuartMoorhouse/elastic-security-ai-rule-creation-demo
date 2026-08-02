@@ -100,6 +100,8 @@ Review the generated ES|QL — it should aggregate by `user.name` and `source.ip
 
 On the **Actions** tab, before saving: add the Workflow as a rule action — select **Okta Credential Stuffing Response** from the Workflow picker. The `script_id` input is pre-filled automatically by `configure.sh`.
 
+Also on the **Actions** tab, enable **Alert suppression**: suppress by `okta.actor.alternate_id` and `okta.client.ip`, per time period, **1 hour**. This prevents the rule firing a new alert (and triggering the Workflow) on every 5-minute run while the seed data is present in the index. Each unique `(user, attacker IP)` pair still produces exactly one alert — `add-attack-scenario.sh` uses a fresh IP each run, so every new scenario still fires; `prepare-and-reset-demo.sh` wipes the events, resetting suppression.
+
 Click **Apply to creation** and enable the rule.
 
 ### Step 2: Detect
