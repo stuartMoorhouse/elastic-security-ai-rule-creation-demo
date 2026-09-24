@@ -3,12 +3,10 @@
 # create-detection-rule.sh
 #
 # Creates the Okta credential stuffing ES|QL detection rule with alert
-# suppression, then binds the deployed workflow to it by injecting the
-# rule UUID into the workflow YAML trigger (ruleId field). No manual
-# Kibana steps required.
+# suppression, then re-deploys the workflow with the script_id substituted.
 #
 # Idempotent: if the rule already exists, skips creation but still
-# re-binds the workflow (safe to re-run after a workflow redeployment).
+# re-deploys the workflow (safe to re-run after a workflow redeployment).
 #
 # Reads credentials from shared/env.json (written by configure.sh).
 # Saves the rule UUID to state/rule-id.
@@ -74,7 +72,7 @@ else
                 risk_score: 73,
                 severity: "high",
                 query: $query,
-                interval: "5m",
+                interval: "1m",
                 from: "now-24h",
                 enabled: true,
                 tags: ["Okta", "Credential Stuffing", "T1110.004", "T1078", "T1098", "Demo"],
@@ -101,11 +99,7 @@ mkdir -p "${STATE_DIR}"
 echo "${RULE_UUID}" > "${STATE_DIR}/rule-id"
 
 # --------------------------------------------------------------------------
-# 2. Bind rule UUID into workflow trigger
-#
-# The workflow YAML trigger supports an optional ruleId field that scopes
-# it to fire only for alerts from this specific rule. We inject the rule
-# UUID here every time (idempotent — same UUID, same result).
+# 2. Re-deploy workflow with script_id substituted
 # --------------------------------------------------------------------------
 WORKFLOW_ID_FILE="${STATE_DIR}/workflow-id"
 WORKFLOW_DEF="${REPO_ROOT}/terraform/workflows/okta-credential-stuffing.yaml"
@@ -113,7 +107,7 @@ SCRIPT_ID_FILE="${STATE_DIR}/script-id"
 
 if [[ ! -f "${WORKFLOW_ID_FILE}" ]]; then
     log ""
-    log "Warning: state/workflow-id not found — skipping workflow trigger binding."
+    log "Warning: state/workflow-id not found — skipping workflow update."
     log "  Run 'terraform apply' to deploy the workflow, then re-run this script."
     exit 0
 fi
@@ -122,8 +116,7 @@ WORKFLOW_ID="$(tr -d '[:space:]' < "${WORKFLOW_ID_FILE}")"
 SCRIPT_UUID=""
 [[ -f "${SCRIPT_ID_FILE}" ]] && SCRIPT_UUID="$(tr -d '[:space:]' < "${SCRIPT_ID_FILE}")"
 
-UPDATED_YAML="$(sed "s/REPLACE_WITH_SCRIPT_LIBRARY_UUID/${SCRIPT_UUID}/g" "${WORKFLOW_DEF}" \
-    | sed "s|  - type: alert|  - type: alert\n    ruleId: ${RULE_UUID}|")"
+UPDATED_YAML="$(sed "s/REPLACE_WITH_SCRIPT_LIBRARY_UUID/${SCRIPT_UUID}/g" "${WORKFLOW_DEF}")"
 
 UPDATE_RESP="$(printf '%s' "${UPDATED_YAML}" | jq -Rs '{"yaml": .}' | \
     curl -s -u "${U}:${P}" \
@@ -132,8 +125,8 @@ UPDATE_RESP="$(printf '%s' "${UPDATED_YAML}" | jq -Rs '{"yaml": .}' | \
     -d @- 2>/dev/null)"
 
 if jq -e '.valid == true' <<<"${UPDATE_RESP}" >/dev/null 2>&1; then
-    log "Workflow trigger bound to rule ${RULE_UUID} (workflow: ${WORKFLOW_ID})."
+    log "Workflow updated (workflow: ${WORKFLOW_ID})."
 else
-    log "Warning: workflow trigger binding may have failed. Response: ${UPDATE_RESP}"
+    log "Warning: workflow update may have failed. Response: ${UPDATE_RESP}"
     log "  Check state/workflow-id is current and 'terraform apply' has completed."
 fi
