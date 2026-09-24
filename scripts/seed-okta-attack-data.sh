@@ -47,6 +47,7 @@ if [[ ! -f "${ENV_JSON}" ]]; then
 fi
 
 ES_URL="$(jq -r '.elasticsearch_url // empty' "${ENV_JSON}")"
+KIBANA_URL="$(jq -r '.kibana_url // empty' "${ENV_JSON}")"
 ES_USER="$(jq -r '.elastic_username // empty' "${ENV_JSON}")"
 ES_PASSWORD="$(jq -r '.elastic_password // empty' "${ENV_JSON}")"
 
@@ -157,7 +158,7 @@ build_okta_event() {
                 "reason": (if $reason != "" then $reason else null end)
             },
             "actor": {
-                "id":          ("00u" + $uuid[0:17]),
+                "id":          ("00u" + (($user | split("@")[0]) + "AAAAAAAAAAAAAAAAAA")[0:17]),
                 "type":        "User",
                 "alternateId": $user,
                 "displayName": ($user | split("@")[0] | split(".") |
@@ -303,6 +304,115 @@ if [[ "$(jq -r '.errors' <<<"${BENIGN_RESPONSE}" 2>/dev/null || echo true)" != "
     exit 1
 fi
 log "Indexed 2 events for ${BENIGN_IP}."
+
+# --------------------------------------------------------------------------
+# 4. Seed Windows Security logon events for jsmith (entity store refresh)
+#
+# The entity store transform has a 3-hour lookback window. Seeding fresh
+# event 4624 records here ensures jsmith is in the entity store within ~2
+# minutes of every demo reset, regardless of when EntityStoreSeed last ran.
+# --------------------------------------------------------------------------
+step "Seeding Windows Security logon events for jsmith (entity store)"
+
+# Resolve Fleet agent metadata — used to make synthetic events indistinguishable
+# from real Windows Security events (agent.id and host.id are what the entity
+# store uses to establish the user-host co-occurrence association).
+HOST_NAME="secdemo-vm"
+AGENT_ID=""
+HOST_ID=""
+if [[ -n "${KIBANA_URL}" ]]; then
+    FLEET_RESP="$(curl -s -u "${ES_USER}:${ES_PASSWORD}" \
+        -H 'kbn-xsrf: true' \
+        "${KIBANA_URL%/}/api/fleet/agents?perPage=1&kuery=status%3Aonline" 2>/dev/null || true)"
+    FLEET_HOST="$(jq -r '.items[0].local_metadata.host.hostname // empty' <<<"${FLEET_RESP}" 2>/dev/null || true)"
+    FLEET_AGENT="$(jq -r '.items[0].id // empty' <<<"${FLEET_RESP}" 2>/dev/null || true)"
+    FLEET_HOST_ID="$(jq -r '.items[0].local_metadata.host.id // empty' <<<"${FLEET_RESP}" 2>/dev/null || true)"
+    [[ -n "${FLEET_HOST}" ]]  && HOST_NAME="${FLEET_HOST}"
+    [[ -n "${FLEET_AGENT}" ]] && AGENT_ID="${FLEET_AGENT}"
+    [[ -n "${FLEET_HOST_ID}" ]] && HOST_ID="${FLEET_HOST_ID}"
+fi
+log "Targeting host: ${HOST_NAME} (agent: ${AGENT_ID:-unknown})"
+
+LOGON_BULK=""
+for i in 1 2 3 4; do
+    TS="$(minutes_ago $(( i * 5 )))"
+    LOGON_BULK+="{\"create\":{}}"$'\n'
+    LOGON_BULK+="$(jq -nc \
+        --arg ts       "${TS}" \
+        --arg host     "${HOST_NAME}" \
+        --arg host_id  "${HOST_ID}" \
+        --arg agent_id "${AGENT_ID}" \
+        '{
+            "@timestamp": $ts,
+            "event": {
+                "action":   "logged-in",
+                "code":     "4624",
+                "category": ["authentication"],
+                "type":     ["start"],
+                "outcome":  "success",
+                "kind":     "event",
+                "provider": "Microsoft-Windows-Security-Auditing",
+                "dataset":  "system.security"
+            },
+            "host": {
+                "name":     $host,
+                "hostname": $host,
+                "id":       $host_id,
+                "os":       {"family": "windows", "platform": "windows"}
+            },
+            "user": {"name": "jsmith", "domain": "."},
+            "agent": {
+                "id":      $agent_id,
+                "name":    $host,
+                "type":    "filebeat"
+            },
+            "elastic_agent": {"id": $agent_id},
+            "data_stream": {
+                "type":      "logs",
+                "dataset":   "system.security",
+                "namespace": "default"
+            },
+            "ecs": {"version": "8.11.0"},
+            "winlog": {"event_id": 4624, "logon": {"type": "Interactive"}}
+        }')"$'\n'
+done
+
+LOGON_RESPONSE="$(es_post "/logs-system.security-default/_bulk?refresh=true" "${LOGON_BULK}")"
+if [[ "$(jq -r '.errors' <<<"${LOGON_RESPONSE}" 2>/dev/null || echo true)" != "false" ]]; then
+    log "Warning: logon event bulk index reported errors — entity store may be stale."
+    log "$(jq -r '.items[0]' <<<"${LOGON_RESPONSE}" 2>/dev/null || echo "${LOGON_RESPONSE}" | head -c 300)"
+else
+    log "Indexed 4 logon events for jsmith@${HOST_NAME}."
+fi
+
+# Also directly inject the jsmith entity into the v2 entity store so it is
+# immediately available (before the engine's next ~1-minute transform cycle).
+ES_V2_IDX="$(curl -s -u "${ES_USER}:${ES_PASSWORD}" \
+    "${ES_URL%/}/_cat/indices/.entities.v2.latest.security_default-*?h=index&format=json" 2>/dev/null \
+    | jq -r '.[0].index // empty' 2>/dev/null || true)"
+if [[ -n "${ES_V2_IDX}" ]]; then
+    TS_NOW="$(minutes_ago 0)"
+    ENTITY_ID="$(printf 'jsmith@%s' "${HOST_NAME}" | openssl dgst -sha256 | awk '{print $2}')"
+    INJECT_RESP="$(curl -s -u "${ES_USER}:${ES_PASSWORD}" \
+        -X PUT "${ES_URL%/}/${ES_V2_IDX}/_doc/${ENTITY_ID}?refresh=true" \
+        -H 'Content-Type: application/json' \
+        -d "$(jq -nc \
+            --arg ts   "${TS_NOW}" \
+            --arg host "${HOST_NAME}" \
+            '{"@timestamp": $ts,
+              "host": {"name": $host},
+              "user": {"name": "jsmith"},
+              "entity": {"name": ("jsmith@" + $host), "type": "Identity"}}')")"
+    INJECT_RESULT="$(jq -r '.result // "error"' <<<"${INJECT_RESP}" 2>/dev/null || echo "error")"
+    if [[ "${INJECT_RESULT}" == "created" || "${INJECT_RESULT}" == "updated" ]]; then
+        log "Entity store: jsmith@${HOST_NAME} ${INJECT_RESULT}."
+    else
+        log "Warning: entity store direct inject returned: ${INJECT_RESULT}"
+    fi
+else
+    log "Warning: v2 entity store index not found — skipping direct inject."
+fi
+log "Entity store: jsmith@${HOST_NAME} available immediately."
 
 step "Done"
 log "Seed data loaded into ${DATA_STREAM}:"

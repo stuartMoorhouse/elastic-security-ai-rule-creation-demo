@@ -159,6 +159,40 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# 4a. Create demo_reset role and user (for clearing restricted workflow indices)
+#
+# The .workflows-executions index is a restricted Elasticsearch index.
+# Even the elastic superuser cannot write/delete from it without a role that
+# explicitly sets allow_restricted_indices: true. We create a dedicated role
+# and user here so that prepare-and-reset-demo.sh can purge failed workflow
+# run history without manual intervention.
+# --------------------------------------------------------------------------
+step "Creating demo_reset role and user (workflow history cleanup)"
+
+curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    -H 'Content-Type: application/json' \
+    -X PUT "${ELASTICSEARCH_URL%/}/_security/role/demo_reset_workflows" \
+    -d '{
+      "indices": [{
+        "names": [".workflows-executions", ".workflows-step-executions"],
+        "privileges": ["all"],
+        "allow_restricted_indices": true
+      }]
+    }' > /dev/null
+
+DEMO_RESET_PASS="DemoReset-$(openssl rand -hex 8)"
+curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    -H 'Content-Type: application/json' \
+    -X PUT "${ELASTICSEARCH_URL%/}/_security/user/demo_reset_user" \
+    -d "{\"password\":\"${DEMO_RESET_PASS}\",\"roles\":[\"demo_reset_workflows\"]}" > /dev/null
+
+# Persist to env.json so prepare-and-reset-demo.sh can read it
+TMP_ENV_JSON="$(mktemp)"
+jq --arg p "${DEMO_RESET_PASS}" '.demo_reset_password = $p' "${ENV_JSON}" > "${TMP_ENV_JSON}"
+mv "${TMP_ENV_JSON}" "${ENV_JSON}"
+log "demo_reset_user created and credentials saved to env.json."
+
+# --------------------------------------------------------------------------
 # 4. Ensure .logs-endpoint.actions-default data stream exists
 #    (required for response actions / run_script; not auto-created on new deployments)
 # --------------------------------------------------------------------------
@@ -400,27 +434,27 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 9. Manual steps checklist
+# 9. Create the detection rule
 # --------------------------------------------------------------------------
-step "Manual steps remaining (not automated by Terraform - see README.md)"
+step "Creating Okta detection rule"
+
+bash "${SCRIPT_DIR}/create-detection-rule.sh"
+
+# --------------------------------------------------------------------------
+# 10. Final checklist
+# --------------------------------------------------------------------------
+step "Setup complete"
 
 cat <<EOF
 
-  1. Author the AI/ES|QL detection rule using Agent Builder's AI rule creation.
-     Prompt and MITRE mapping reference: ${CONFIG_DIR}/ai-detection-rule-prompt.md
+  Setup complete. Run prepare-and-reset-demo.sh to seed fresh Okta attack
+  telemetry — the rule fires within 5 minutes and the Workflow creates and
+  closes a case automatically.
 
-     When saving the rule, add the Workflow deployed by Terraform as a rule action.
-     Workflow ID:  $(cat "${REPO_ROOT}/state/workflow-id" 2>/dev/null || echo "(see state/workflow-id after terraform apply)")
-     The script_id input is pre-filled automatically — no manual entry needed.
+    ./scripts/prepare-and-reset-demo.sh
 
-  2. Run scripts/prepare-and-reset-demo.sh to seed fresh Okta attack telemetry.
-     Then run scripts/add-attack-scenario.sh to add a new attacker scenario —
-     this fires the Workflow and demonstrates automated case management.
+  See README.md for the full demo flow.
 
-The Workflow, Elastic Defend integration, script library upload, and script ID
-binding are all automated — no manual copy/paste needed.
-
-See README.md for the full demo flow.
 EOF
 
 log ""

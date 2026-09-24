@@ -1,6 +1,6 @@
 # Elastic Security 9.4 Webinar Demo
 
-Self-contained demo of AI-assisted detection, identity-to-endpoint correlation via the Entity Store, Runscript response, and Workflow-driven case automation, run against a Windows VM enrolled in Elastic Cloud.
+Self-contained demo of automated detection-to-response: a detection rule fires on Okta credential stuffing telemetry, the Entity Store resolves which endpoint the compromised user last logged into, and a Workflow automatically opens a case, runs a remediation script via Runscript, and closes the case — all without human intervention.
 
 ## The threat
 
@@ -14,7 +14,7 @@ MITRE: T1110.004 (Credential Stuffing), T1078 (Valid Accounts), T1098 (Account M
 
 | Agenda item | Feature |
 |---|---|
-| AI-assisted detection engineering | **AI rule creation** in Agent Builder — describe the threat in natural language, generate/refine an ES\|QL aggregation rule |
+| High-fidelity threat detection | **ES\|QL aggregation rule** detecting the full four-stage Okta credential stuffing chain — fires only when all stages are present for the same user and IP |
 | Identity-to-endpoint correlation | **Entity Store** — correlates Okta identities to Windows hosts via interactive logon records (Windows Security event 4624), enabling the Workflow to target the exact endpoint rather than guessing |
 | Automated response & case management | **Workflows**, launched from an alert, combining a **Runscript** response action + centralized **Script library** (Elastic Defend, GA 9.4) to block the `source.ip` and disable accounts, with **Cases** action steps to triage and document the incident |
 
@@ -41,36 +41,42 @@ terraform -chdir=terraform apply
 - Deploys the **Okta Credential Stuffing Response** workflow to Kibana
 - Runs `scripts/configure.sh` — writes `shared/env.json`, creates the endpoint response-actions data stream, installs the Okta Fleet integration, waits for the agent to show healthy in Fleet, uploads `scripts/remediate-okta-compromise.ps1` to the Script library (saving its UUID to `state/script-id`), and updates the deployed Workflow with that UUID so the `script_id` input is pre-filled
 
+### After first provisioning (one-time)
+
+```bash
+./scripts/configure.sh
+```
+
+`configure.sh` creates the detection rule and automatically binds the **Okta Credential Stuffing Response** workflow to it by injecting the rule UUID into the workflow trigger. No manual Kibana steps required.
+
 ### Before each demo take (including the first)
 
 ```bash
+# 1. Reset — clears alerts, cases, Okta telemetry, failed workflow runs, and the endpoint
 ./scripts/prepare-and-reset-demo.sh
+
+# 2. When ready to fire the rule, seed the attack data
+./scripts/seed-okta-attack-data.sh
 ```
 
-Seeds fresh Okta attack telemetry with current timestamps, and closes any open alerts and cases from the previous take. Run this before every demo, including the first time after `terraform apply`.
+`prepare-and-reset-demo.sh` clears the previous take's state and ensures the detection rule exists. It does **not** seed new data — that is a separate step so you can attach the workflow to the rule in Kibana between reset and trigger if needed. The rule and its workflow action are preserved across resets.
 
 ## Connecting to the VM
 
 The VM enrollment script installs OpenSSH Server, so the simplest way to run response actions or inspect state is SSH from your machine — no RDP client needed. (RDP is also open on 3389 from `my_ip` if you want the GUI.)
 
-Grab connection details from Terraform outputs:
+Connection details are in `shared/env.json` (written by `configure.sh`):
 
 ```bash
-export VM_IP=$(terraform -chdir=terraform output -raw vm_public_ip)
-export VM_USER=$(terraform -chdir=terraform output -raw vm_admin_username)
-terraform -chdir=terraform output -raw vm_admin_password   # prints the admin password
+VM_IP=$(jq -r '.vm_public_ip' shared/env.json)
+VM_USER=$(jq -r '.vm_admin_username' shared/env.json)
+VM_PASS=$(jq -r '.vm_admin_password' shared/env.json)
 ```
 
-SSH in (enter the password from above when prompted):
+SSH in with [`sshpass`](https://formulae.brew.sh/formula/sshpass) (`brew install hudochenkov/sshpass/sshpass`) to avoid copy/paste mangling of the password. Pass `powershell` as the remote command so you land in PowerShell directly rather than cmd.exe:
 
 ```bash
-ssh "${VM_USER}@${VM_IP}"
-```
-
-If the password is rejected, copy/paste corruption between terminals (e.g. VS Code's integrated terminal wrapping/mangling long special-character strings) is a common culprit — skip the manual copy entirely and feed the password straight from Terraform to `ssh` with [`sshpass`](https://formulae.brew.sh/formula/sshpass) (`brew install hudochenkov/sshpass/sshpass`):
-
-```bash
-sshpass -p "$(terraform -chdir=terraform output -raw vm_admin_password)" ssh "${VM_USER}@${VM_IP}"
+sshpass -p "$VM_PASS" ssh "$VM_USER@$VM_IP" powershell
 ```
 
 RDP instead, if preferred:
@@ -83,28 +89,7 @@ If SSH or RDP hangs on connect, your public IP has likely changed since the NSG 
 
 ## Demo steps
 
-### Step 1: Author the detection rule (AI rule creation)
-
-In Kibana: Security → Rules → Create new rule → **AI rule creation**.
-
-Paste this prompt:
-
-> *Within a 24-hour window, for each Okta actor and client IP: count sign-on failures with reason INVALID_CREDENTIALS, failed MFA challenges including push denials, successful sign-ons, and successful post-compromise actions where the actor is the one performing the action. Post-compromise means group membership add, application assignment, privilege grant, MFA factor enrolment, a change to a policy or policy rule (a modification, not an evaluation), or a profile update — explicitly excluding password changes. Require the post-compromise action to occur after the first successful sign-on.
- Before writing any field names, call the Elasticsearch GET API on 
-   logs-okta.system-default/_mapping and use only field paths that exist in the 
-   response. Do not use any field name that is not present in the mapping.
-
-*
-
-Review the generated ES|QL — it should aggregate by `user.name` and `source.ip`, use `MIN(@timestamp)` with per-condition filters to capture the first success and first post-compromise timestamps, and enforce the temporal ordering in the `WHERE` clause. Optionally refine. Review the MITRE mapping. Click **Preview rule results** — `jsmith@example.com` should appear (all four stages); `bjones`, `alee`, and `mwilson` should not.
-
-On the **Actions** tab, before saving: add the Workflow as a rule action — select **Okta Credential Stuffing Response** from the Workflow picker. The `script_id` input is pre-filled automatically by `configure.sh`.
-
-Also on the **Actions** tab, enable **Alert suppression**: suppress by `okta.actor.alternate_id` and `okta.client.ip`, per time period, **1 hour**. This prevents the rule firing a new alert (and triggering the Workflow) on every 5-minute run while the seed data is present in the index. Each unique `(user, attacker IP)` pair still produces exactly one alert — `add-attack-scenario.sh` uses a fresh IP each run, so every new scenario still fires; `prepare-and-reset-demo.sh` wipes the events, resetting suppression.
-
-Click **Apply to creation** and enable the rule.
-
-### Step 2: Detect
+### Step 1: Detect
 
 Navigate to Security → Alerts. The rule fires immediately on the seeded data — show the alert for `jsmith@example.com`. Walk the aggregation fields (`failed_logins`, `mfa_failures`, `successful_logins`, `post_compromise_events`) to show why this user/IP triggered and the others did not.
 
@@ -116,7 +101,7 @@ The alert carries two key facts: the compromised identity (`jsmith@example.com`)
 
 The Elastic Entity Store answers that question. It runs continuously in the background, correlating identities across data sources. When the Windows System integration collected interactive logon events (Windows Security event 4624), the entity store recorded that `jsmith` last authenticated on `DEMO-VM-01`. Workflow step 6 (`find_user_entity`) queries the entity store v2 index, strips the domain from the Okta actor email to get the local username, and retrieves the associated hostname. Step 6b (`find_agent`) then resolves the Fleet agent ID for that specific host. The remediation script fires against the exact right machine — not the first Windows agent in Fleet, not a hardcoded hostname, but the one the entity store identified as `jsmith`'s endpoint.
 
-### Step 3: Respond — show the auto-created case
+### Step 2: Respond — show the auto-created case
 
 Open Security → Cases. The Workflow fired when the alert was created and ran nine automated steps:
 
@@ -141,10 +126,7 @@ Walk the case timeline: created → in-progress → observables → AI analysis 
 
 ```powershell
 # Show the firewall rule and the specific IP it blocks
-Get-NetFirewallRule -DisplayName "Elastic-OktaCompromise-Block-*" |
-  ForEach-Object { $_ | Get-NetFirewallAddressFilter |
-    Select-Object @{n='Rule';e={$_.InstanceID}}, RemoteAddress } |
-  Format-Table -AutoSize
+Get-NetFirewallRule -DisplayName "Elastic-OktaCompromise-Block-*" | ForEach-Object { $_ | Get-NetFirewallAddressFilter | Select-Object @{n='Rule';e={$_.InstanceID}}, RemoteAddress } | Format-Table -AutoSize
 
 # Show the compromised account is disabled
 Get-LocalUser -Name jsmith | Select-Object Name, Enabled

@@ -49,27 +49,57 @@ locals {
   ])
 }
 
-resource "azurerm_virtual_machine_extension" "elastic_agent" {
-  name                       = "install-elastic-agent"
-  virtual_machine_id         = azurerm_windows_virtual_machine.main.id
-  publisher                  = "Microsoft.Compute"
-  type                       = "CustomScriptExtension"
-  type_handler_version       = "1.10"
-  auto_upgrade_minor_version = true
+# Uses az CLI instead of azurerm_virtual_machine_extension to avoid two provider bugs:
+# 1. Failed applies leave a stale extension in Azure that Terraform can't reconcile without
+#    a manual import (the provider doesn't clean up partial failures).
+# 2. The provider's async polling can return "Unknown" status even when the extension
+#    succeeds, requiring a manual import to continue.
+# The az CLI handles polling correctly and lets us check/clean state upfront.
+resource "null_resource" "elastic_agent" {
+  triggers = {
+    vm_id = azurerm_windows_virtual_machine.main.id
+  }
 
-  # The script is downloaded from private blob storage (fileUris + SAS token);
-  # commandToExecute is short — it only passes the three credential parameters.
-  # Both live in protected_settings (encrypted by Azure) to keep the token secret.
-  protected_settings = jsonencode({
-    fileUris         = ["${azurerm_storage_blob.install_script.url}${data.azurerm_storage_account_sas.scripts.sas}"]
-    commandToExecute = "powershell -ExecutionPolicy Bypass -File install.ps1 -ElasticVersion \"${data.ec_stack.latest.version}\" -FleetUrl \"${local.fleet_url}\" -EnrollmentToken \"${local.enrollment_token}\""
-  })
+  provisioner "local-exec" {
+    command = <<-SCRIPT
+      set -e
+      RG="${azurerm_resource_group.main.name}"
+      VM="${azurerm_windows_virtual_machine.main.name}"
+      EXT="install-elastic-agent"
 
-  # Don't re-run the install script on already-provisioned VMs. The agent is
-  # enrolled and running; re-running the extension when the script changes
-  # (new token, version bump, etc.) would try to overwrite locked agent files.
-  # Taint this resource manually if a full re-enroll is needed.
-  lifecycle {
-    ignore_changes = [protected_settings]
+      STATE=$(az vm extension show \
+        --resource-group "$RG" --vm-name "$VM" --name "$EXT" \
+        --query provisioningState -o tsv 2>/dev/null || echo "NotFound")
+      echo "Extension state: $STATE"
+
+      if [ "$STATE" = "Succeeded" ]; then
+        echo "Extension already succeeded — skipping."
+        exit 0
+      fi
+
+      if [ "$STATE" != "NotFound" ]; then
+        echo "Removing stale extension (state: $STATE)..."
+        az vm extension delete --resource-group "$RG" --vm-name "$VM" --name "$EXT"
+      fi
+
+      SETTINGS=$(mktemp)
+      trap "rm -f $SETTINGS" EXIT
+      printf '%s' "$PROTECTED_SETTINGS" > "$SETTINGS"
+
+      az vm extension set \
+        --resource-group "$RG" \
+        --vm-name "$VM" \
+        --name CustomScriptExtension \
+        --publisher Microsoft.Compute \
+        --version 1.10 \
+        --protected-settings "@$SETTINGS"
+    SCRIPT
+
+    environment = {
+      PROTECTED_SETTINGS = jsonencode({
+        fileUris         = ["${azurerm_storage_blob.install_script.url}${data.azurerm_storage_account_sas.scripts.sas}"]
+        commandToExecute = "powershell -ExecutionPolicy Bypass -File install.ps1 -ElasticVersion \"${data.ec_stack.latest.version}\" -FleetUrl \"${local.fleet_url}\" -EnrollmentToken \"${local.enrollment_token}\""
+      })
+    }
   }
 }

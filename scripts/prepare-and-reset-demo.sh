@@ -2,17 +2,10 @@
 #
 # prepare-and-reset-demo.sh
 #
-# Run on the operator's machine before every demo take, including the first.
-# Seeds fresh Okta attack telemetry with current timestamps, and cleans up
-# the previous take's alerts and cases via the Kibana/Elasticsearch APIs
-# (credentials from ./shared/env.json, written by configure.sh).
-#
-# Remote remediation via Fleet's endpoint "runscript" response action is
-# intentionally NOT automated here: as of this writing that API surface is
-# new (Elastic Defend GA 9.4) and its exact request schema should be verified
-# against the Kibana API reference for the deployed stack version before
-# scripting against it. Manual "run block-spray-source.ps1 via runscript"
-# instructions are printed instead - see the checklist at the end.
+# Resets demo state between takes. Clears alerts, cases, Okta telemetry, and
+# failed workflow runs; resets the Windows endpoint; and ensures the detection
+# rule exists. Does NOT seed new Okta data — run seed-okta-attack-data.sh
+# separately when you are ready to trigger the rule.
 #
 # Idempotent: safe to re-run, and safe to run when there is nothing to reset.
 
@@ -45,8 +38,10 @@ if [[ ! -f "${ENV_JSON}" ]]; then
 fi
 
 KIBANA_URL="$(jq -r '.kibana_url // empty' "${ENV_JSON}")"
+ELASTICSEARCH_URL="$(jq -r '.elasticsearch_url // empty' "${ENV_JSON}")"
 ELASTIC_USERNAME="$(jq -r '.elastic_username // empty' "${ENV_JSON}")"
 ELASTIC_PASSWORD="$(jq -r '.elastic_password // empty' "${ENV_JSON}")"
+DEMO_RESET_PASSWORD="$(jq -r '.demo_reset_password // empty' "${ENV_JSON}")"
 INFRA_READY="$(jq -r '.infra_ready // false' "${ENV_JSON}")"
 VM_PUBLIC_IP="$(jq -r '.vm_public_ip // empty' "${ENV_JSON}")"
 VM_ADMIN_USERNAME="$(jq -r '.vm_admin_username // empty' "${ENV_JSON}")"
@@ -78,35 +73,24 @@ kibana_get() {
 }
 
 # --------------------------------------------------------------------------
-# 1. Close open alerts (Detections API)
+# 1. Delete all alerts from the previous take
+#
+# Closing alerts is not enough — the ES|QL rule deduplicates by
+# (okta.actor.alternate_id, okta.client.ip) and will not create new alerts
+# while any prior alert with the same key exists, regardless of status.
+# Delete-by-query removes them entirely so the next rule run fires fresh.
 # --------------------------------------------------------------------------
-step "Closing open alerts from the previous take"
+step "Deleting alerts from the previous take"
 
-SEARCH_BODY='{"query":{"bool":{"filter":[{"term":{"kibana.alert.workflow_status":"open"}}]}},"size":1000}'
-
-SEARCH_RESPONSE="$(kibana_post "/api/detection_engine/signals/search" "${SEARCH_BODY}")"
-
-if ! jq -e . >/dev/null 2>&1 <<<"${SEARCH_RESPONSE}"; then
-    err "Unexpected response searching for open alerts: ${SEARCH_RESPONSE}"
-    exit 1
-fi
-
-ALERT_IDS="$(jq -r '[.hits.hits[]?._id] | @json' <<<"${SEARCH_RESPONSE}")"
-ALERT_COUNT="$(jq -r 'length' <<<"${ALERT_IDS}")"
-
-if [[ "${ALERT_COUNT}" -eq 0 ]]; then
-    log "No open alerts found (nothing to close)."
+DELETE_RESP="$(curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    -H 'Content-Type: application/json' \
+    -X POST "${ELASTICSEARCH_URL%/}/.alerts-security.alerts-default/_delete_by_query?refresh=true&conflicts=proceed" \
+    -d '{"query":{"match_all":{}}}')"
+DELETED="$(jq -r '.deleted // 0' <<<"${DELETE_RESP}" 2>/dev/null || echo 0)"
+if [[ "${DELETED}" -gt 0 ]]; then
+    log "Deleted ${DELETED} alert(s)."
 else
-    log "Found ${ALERT_COUNT} open alert(s); closing..."
-    CLOSE_BODY="$(jq -n --argjson ids "${ALERT_IDS}" '{signal_ids: $ids, status: "closed"}')"
-    CLOSE_RESPONSE="$(kibana_post "/api/detection_engine/signals/status" "${CLOSE_BODY}")"
-    UPDATED="$(jq -r '.updated // 0' <<<"${CLOSE_RESPONSE}" 2>/dev/null || echo 0)"
-    if [[ "${UPDATED}" -gt 0 ]]; then
-        log "Closed ${UPDATED} alert(s)."
-    else
-        err "Failed to close alerts. Response: ${CLOSE_RESPONSE}"
-        exit 1
-    fi
+    log "No alerts to delete (or index empty)."
 fi
 
 # --------------------------------------------------------------------------
@@ -141,39 +125,15 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 3. Delete the Okta detection rule (so it is re-authored fresh next take)
+# 3. Ensure the detection rule exists
+#
+# The rule is kept across demo resets (not deleted) so that the workflow
+# action attached to it via the Kibana UI is preserved. create-detection-rule.sh
+# is idempotent — it skips creation if the rule already exists.
 # --------------------------------------------------------------------------
-step "Deleting the Okta detection rule (if it exists)"
+step "Ensuring detection rule exists"
 
-# Matches any rule whose name contains "okta" (case-insensitive). In this demo
-# environment that is always the AI-generated credential-stuffing rule.
-RULES_RESPONSE="$(kibana_get "/api/detection_engine/rules/_find?per_page=100")"
-
-if ! jq -e . >/dev/null 2>&1 <<<"${RULES_RESPONSE}"; then
-    err "Unexpected response from detection rules API: ${RULES_RESPONSE}"
-    exit 1
-fi
-
-OKTA_RULES="$(jq -c '[.data[]? | select(.name | ascii_downcase | contains("okta")) | {id: .id, name: .name}]' <<<"${RULES_RESPONSE}")"
-OKTA_RULE_COUNT="$(jq 'length' <<<"${OKTA_RULES}")"
-
-if [[ "${OKTA_RULE_COUNT}" -eq 0 ]]; then
-    log "No Okta detection rule found (nothing to delete)."
-else
-    jq -r '.[] | "\(.id)\t\(.name)"' <<<"${OKTA_RULES}" | while IFS=$'\t' read -r RULE_ID RULE_NAME; do
-        log "Deleting rule: \"${RULE_NAME}\" (${RULE_ID})..."
-        DEL_CODE="$(curl -s -o /dev/null -w '%{http_code}' \
-            -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
-            -H 'kbn-xsrf: true' \
-            -X DELETE \
-            "${KIBANA_URL%/}/api/detection_engine/rules?id=${RULE_ID}")"
-        if [[ "${DEL_CODE}" == "200" ]]; then
-            log "  Deleted."
-        else
-            log "  Warning: delete returned HTTP ${DEL_CODE}."
-        fi
-    done
-fi
+bash "${REPO_ROOT}/scripts/create-detection-rule.sh"
 
 # --------------------------------------------------------------------------
 # 4. Reset the Windows endpoint: remove firewall block rule, re-enable jsmith
@@ -216,21 +176,85 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 5. Re-seed Okta attack telemetry for the next take
+# 5. Clear Okta demo telemetry
+#
+# Remove previous take's events so stale data doesn't re-fire the rule
+# before the next seed. Targets only the known demo IPs.
 # --------------------------------------------------------------------------
-step "Seeding fresh Okta attack telemetry"
+step "Clearing Okta demo telemetry"
 
-bash "${REPO_ROOT}/scripts/seed-okta-attack-data.sh"
+DEMO_IPS='["203.0.113.66","203.0.113.67","203.0.113.68","203.0.113.69","203.0.113.70","203.0.113.71","198.51.100.20"]'
+OKTA_DELETE_RESP="$(curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" \
+    -H 'Content-Type: application/json' \
+    -X POST "${ELASTICSEARCH_URL%/}/logs-okta.system-default/_delete_by_query?refresh=true&conflicts=proceed" \
+    -d "{\"query\":{\"bool\":{\"filter\":[{\"terms\":{\"source.ip\":${DEMO_IPS}}}]}}}")"
+OKTA_DELETED="$(jq -r '.deleted // 0' <<<"${OKTA_DELETE_RESP}" 2>/dev/null || echo 0)"
+if [[ "${OKTA_DELETED}" -gt 0 ]]; then
+    log "Deleted ${OKTA_DELETED} Okta demo event(s)."
+else
+    log "No Okta demo events to delete."
+fi
 
 # --------------------------------------------------------------------------
-# 6. Next-take checklist
+# 6. Delete failed workflow runs
+#
+# The Kibana Workflows API has no delete endpoint for executions, so we
+# write directly to the backing Elasticsearch indices. We collect failed
+# execution IDs, delete their step-level records first, then the parent
+# execution documents. Completed runs are left intact.
 # --------------------------------------------------------------------------
+step "Deleting failed workflow run history"
+
+# .workflows-executions is a restricted index — even the elastic superuser
+# cannot delete from it without allow_restricted_indices: true. configure.sh
+# creates demo_reset_user with that privilege; we use it here.
+if [[ -z "${DEMO_RESET_PASSWORD}" ]]; then
+    log "Warning: demo_reset_password not in env.json — run configure.sh to provision demo_reset_user."
+    log "Skipping workflow run cleanup."
+else
+    RESET_CREDS="demo_reset_user:${DEMO_RESET_PASSWORD}"
+
+    # Collect all failed execution IDs (up to 1000).
+    FAILED_EXEC_RESP="$(curl -s -u "${RESET_CREDS}" \
+        -H 'Content-Type: application/json' \
+        -X POST "${ELASTICSEARCH_URL%/}/.workflows-executions/_search" \
+        -d '{"size":1000,"_source":["id"],"query":{"term":{"status":"failed"}}}')"
+    FAILED_IDS="$(jq -r '[.hits.hits[]._source.id] | @json' <<<"${FAILED_EXEC_RESP}" 2>/dev/null || echo '[]')"
+    FAILED_COUNT="$(jq -r 'length' <<<"${FAILED_IDS}")"
+
+    if [[ "${FAILED_COUNT}" -eq 0 ]]; then
+        log "No failed workflow runs found (nothing to delete)."
+    else
+        log "Found ${FAILED_COUNT} failed run(s); deleting..."
+
+        # Delete step executions for those failed runs.
+        STEPS_RESP="$(curl -s -u "${RESET_CREDS}" \
+            -H 'Content-Type: application/json' \
+            -X POST "${ELASTICSEARCH_URL%/}/.workflows-step-executions/_delete_by_query?refresh=true&conflicts=proceed" \
+            -d "{\"query\":{\"terms\":{\"executionId\":${FAILED_IDS}}}}")"
+        STEPS_DELETED="$(jq -r '.deleted // 0' <<<"${STEPS_RESP}" 2>/dev/null || echo 0)"
+
+        # Delete the parent execution records.
+        EXEC_RESP="$(curl -s -u "${RESET_CREDS}" \
+            -H 'Content-Type: application/json' \
+            -X POST "${ELASTICSEARCH_URL%/}/.workflows-executions/_delete_by_query?refresh=true&conflicts=proceed" \
+            -d '{"query":{"term":{"status":"failed"}}}')"
+        EXEC_DELETED="$(jq -r '.deleted // 0' <<<"${EXEC_RESP}" 2>/dev/null || echo 0)"
+
+        log "Deleted ${EXEC_DELETED} failed execution(s) and ${STEPS_DELETED} step record(s)."
+    fi
+fi
+
 step "Reset complete"
 
 cat <<EOF
 
   Alerts, cases, Okta telemetry, and the detection rule have been reset.
   The Windows endpoint firewall rule and jsmith account have been restored.
+  Failed workflow runs have been removed from the execution history.
+
+  When ready to trigger the demo:
+    ./scripts/seed-okta-attack-data.sh
 
 EOF
 

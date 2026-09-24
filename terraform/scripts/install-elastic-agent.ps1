@@ -19,7 +19,17 @@ if ($svc -and $svc.Status -eq "Running") {
     $uri = "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$ElasticVersion-windows-x86_64.zip"
 
     Write-Output "Downloading Elastic Agent $ElasticVersion from $uri ..."
-    Invoke-WebRequest -Uri $uri -OutFile $zip -UseBasicParsing
+    $response = Invoke-WebRequest -Uri $uri -OutFile $zip -UseBasicParsing -PassThru
+    if ($response.StatusCode -ne 200) {
+        Write-Error "Download failed with HTTP $($response.StatusCode): $uri"
+        exit 1
+    }
+    $zipSize = (Get-Item $zip).Length
+    if ($zipSize -lt 10MB) {
+        Write-Error "Downloaded file is suspiciously small ($zipSize bytes) - likely a corrupt or partial download: $zip"
+        exit 1
+    }
+    Write-Output "Download complete ($zipSize bytes). Expanding archive..."
     Expand-Archive -Path $zip -DestinationPath $dest -Force
 
     $agentDir = (Get-ChildItem -Path $dest -Directory -Filter "elastic-agent-*" | Select-Object -First 1).FullName

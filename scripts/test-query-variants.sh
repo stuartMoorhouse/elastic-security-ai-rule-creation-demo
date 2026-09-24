@@ -153,6 +153,21 @@ check "EVAL+STATS, usernamepassword failed + user.authentication.* success" \
 | WHERE failed >= 3 AND mfa >= 1 AND success >= 1 AND post >= 1
 | SORT failed DESC'
 
+# ── Variant 9: actor.id grouping + temporal ordering (AI-generated pattern) ──
+check "okta.actor.id grouping, temporal ordering, OR threshold" \
+'FROM logs-okta.system-default
+| STATS sign_on_failures = COUNT(*) WHERE okta.event_type == "user.session.start" AND okta.outcome.result == "FAILURE" AND okta.outcome.reason == "INVALID_CREDENTIALS",
+        mfa_failures = COUNT(*) WHERE okta.event_type LIKE "user.authentication.auth_via_mfa%" AND okta.outcome.result == "FAILURE",
+        successful_sign_ons = COUNT(*) WHERE okta.event_type == "user.session.start" AND okta.outcome.result == "SUCCESS",
+        first_successful_signon_ts = MIN(@timestamp) WHERE okta.event_type == "user.session.start" AND okta.outcome.result == "SUCCESS",
+        post_compromise_actions = COUNT(*) WHERE okta.event_type IN ("group.user_membership.add","application.user_membership.add","user.account.privilege.grant","user.mfa.factor.activate","policy.rule.update","policy.lifecycle.update","user.account.update_profile") AND okta.outcome.result == "SUCCESS",
+        first_post_compromise_ts = MIN(@timestamp) WHERE okta.event_type IN ("group.user_membership.add","application.user_membership.add","user.account.privilege.grant","user.mfa.factor.activate","policy.rule.update","policy.lifecycle.update","user.account.update_profile") AND okta.outcome.result == "SUCCESS"
+  BY okta.actor.id, okta.client.ip
+| EVAL temporal_order_ok = CASE(first_post_compromise_ts > first_successful_signon_ts, true, false)
+| WHERE successful_sign_ons >= 1 AND post_compromise_actions >= 1 AND temporal_order_ok == true AND (sign_on_failures >= 3 OR mfa_failures >= 1)
+| KEEP okta.actor.id, okta.client.ip, sign_on_failures, mfa_failures, successful_sign_ons, post_compromise_actions
+| SORT post_compromise_actions DESC'
+
 echo "══════════════════════════════════════════════════════════"
 echo "  ${PASS} passed, ${FAIL} failed"
 echo ""

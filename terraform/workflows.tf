@@ -10,7 +10,7 @@
 
 resource "terraform_data" "workflow" {
   depends_on = [
-    azurerm_virtual_machine_extension.elastic_agent,
+    null_resource.elastic_agent,
     data.external.system_integration,
   ]
 

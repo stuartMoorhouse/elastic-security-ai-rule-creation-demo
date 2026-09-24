@@ -20,6 +20,11 @@ resource "ec_deployment" "main" {
       zone_count  = var.elasticsearch_zone_count
       autoscaling = {}
     }
+    ml = {
+      size        = "16g"
+      zone_count  = 1
+      autoscaling = {}
+    }
   }
 
   kibana = {

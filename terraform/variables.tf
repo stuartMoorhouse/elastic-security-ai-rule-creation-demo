@@ -45,7 +45,7 @@ variable "elasticsearch_zone_count" {
 variable "kibana_size" {
   description = "Kibana node size, e.g. \"1g\""
   type        = string
-  default     = "1g"
+  default     = "16g"
 }
 
 variable "kibana_zone_count" {
