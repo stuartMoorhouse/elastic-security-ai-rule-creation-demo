@@ -233,7 +233,7 @@ if [[ -n "${REMEDIATION}" ]]; then
 
     # Extract the hostname from the remediation comment for informational output
     COMMENT_HOST="$(printf '%s' "${REMEDIATION}" | grep -o 'ran against .[^:]*' | sed 's/ran against .//;s/.$//')"
-    [[ -n "${COMMENT_HOST}" ]] && log "  Remediated host: ${COMMENT_HOST} (resolved via entity store)"
+    [[ -n "${COMMENT_HOST}" ]] && log "  Remediated host: ${COMMENT_HOST}"
 else
     fail "Remediation comment NOT found — workflow may not have completed"
 fi

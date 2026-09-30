@@ -11,7 +11,6 @@
 resource "terraform_data" "workflow" {
   depends_on = [
     null_resource.elastic_agent,
-    data.external.system_integration,
   ]
 
   input = {

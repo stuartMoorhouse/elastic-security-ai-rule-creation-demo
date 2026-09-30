@@ -137,28 +137,6 @@ rm -f /tmp/configure_kibana_status.$$
 log "Kibana is reachable and authenticated (HTTP 200 from /api/status)."
 
 # --------------------------------------------------------------------------
-# 3b. Verify entity store v2 is running
-#
-# Elastic Security 9.x auto-initialises entity store v2 on deployment creation.
-# Data lands in .entities.v2.latest.security_default-* (all entity types in one
-# index). There is no Kibana API to "enable" it — we just confirm the index
-# exists and has documents before proceeding.
-# --------------------------------------------------------------------------
-step "Verifying entity store v2"
-
-ENTITY_INDEX_COUNT="$(curl -s \
-    -K "$CURL_AUTH_CONF" \
-    "${ELASTICSEARCH_URL%/}/.entities.v2.latest.security_default-*/_count" \
-    | jq -r '.count // 0' 2>/dev/null || echo 0)"
-
-if [[ "${ENTITY_INDEX_COUNT}" -gt 0 ]]; then
-    log "Entity store v2 is running — ${ENTITY_INDEX_COUNT} entities indexed."
-else
-    log "Warning: entity store v2 index appears empty or not yet created."
-    log "Entity analytics may need a few minutes to initialise after fresh deployment."
-fi
-
-# --------------------------------------------------------------------------
 # 4a. Create demo_reset role and user (for clearing restricted workflow indices)
 #
 # The .workflows-executions index is a restricted Elasticsearch index.
@@ -301,47 +279,6 @@ if [[ "${AGENT_HEALTHY}" != true ]]; then
     exit 1
 fi
 log "Elastic Agent is healthy on policy '${POLICY_NAME}'."
-
-# --------------------------------------------------------------------------
-# 6b. Wait for jsmith entity to appear in entity store v2 with a host association
-#
-# The EntityStoreSeed scheduled task generates 4 Windows Security event 4624
-# records for jsmith (logon type 2 / interactive). The System integration
-# forwards them to logs-system.security-*; entity store v2 then creates a user
-# entity with user.name=jsmith and host.name=secdemo-vm. This is queried via
-# Elasticsearch directly — the Kibana entity list API targets v1 indices which
-# do not exist in this deployment.
-#
-# Schema: entity.type="Identity", host.name=<hostname> (flat field, not array).
-# --------------------------------------------------------------------------
-step "Waiting for jsmith entity (with host) in entity store v2 (up to 5 min)"
-
-ENTITY_FOUND=false
-ENTITY_DEADLINE=$(( $(date +%s) + 300 ))
-while (( $(date +%s) < ENTITY_DEADLINE )); do
-    ENTITY_RESPONSE="$(curl -s \
-        -K "$CURL_AUTH_CONF" \
-        -H 'Content-Type: application/json' \
-        -X POST "${ELASTICSEARCH_URL%/}/.entities.v2.latest.security_default-*/_search" \
-        -d '{"size":1,"_source":["user.name","host.name","entity.name"],"query":{"bool":{"must":[{"term":{"user.name":"jsmith"}},{"exists":{"field":"host.name"}}]}}}' || true)"
-
-    ENTITY_TOTAL="$(jq -r '.hits.total.value // 0' <<<"${ENTITY_RESPONSE}" 2>/dev/null || echo 0)"
-    if [[ "${ENTITY_TOTAL}" -gt 0 ]]; then
-        ENTITY_HOST="$(jq -r '.hits.hits[0]._source.host.name // "?"' <<<"${ENTITY_RESPONSE}" 2>/dev/null || echo "?")"
-        log "jsmith entity found in entity store v2 — host: ${ENTITY_HOST}"
-        ENTITY_FOUND=true
-        break
-    fi
-
-    log "  jsmith entity not yet indexed (retrying in 30s)..."
-    sleep 30
-done
-
-if [[ "${ENTITY_FOUND}" != true ]]; then
-    log "Warning: jsmith entity not found within 5 minutes."
-    log "The EntityStoreSeed task may still be waiting for the Elastic Agent to start."
-    log "Re-run configure.sh in 5-10 minutes, or check Entity Analytics in Kibana."
-fi
 
 # --------------------------------------------------------------------------
 # 7. Upload remediation script to Elastic Defend Script Library

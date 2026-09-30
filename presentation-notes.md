@@ -10,11 +10,10 @@ remediated automatically by a Workflow and Runscript response action.
 1. [The Threat — What Is Happening and Why It Matters](#1-the-threat)
 2. [The Data — How Okta Events Look in Elastic](#2-the-data)
 3. [The Detection — Building the ES|QL Rule](#3-the-detection)
-4. [The Entity Store — Identity-to-Endpoint Bridge](#4-the-entity-store)
-5. [The Workflow — Automated Response](#5-the-workflow)
-6. [The Runscript — Endpoint Remediation](#6-the-runscript)
-7. [SA Talking Points — Step by Step](#7-sa-talking-points)
-8. [Q&A — Likely Questions from Security Practitioners](#8-qa)
+4. [The Workflow — Automated Response](#4-the-workflow)
+5. [The Runscript — Endpoint Remediation](#5-the-runscript)
+6. [SA Talking Points — Step by Step](#6-sa-talking-points)
+7. [Q&A — Likely Questions from Security Practitioners](#7-qa)
 
 ---
 
@@ -354,75 +353,7 @@ FROM logs-okta.system-*
 
 ---
 
-## 4. The Entity Store — Identity-to-Endpoint Bridge
-
-### The Gap the Entity Store Fills
-
-The Okta credential stuffing alert carries two facts: the compromised identity (`jsmith@example.com`) and the attacker's source IP. What it does not carry is the name of the Windows host the attacker now has access to through that compromised SSO token. Okta is an identity plane; it has no knowledge of endpoint infrastructure.
-
-The automated Workflow needs to fire a Runscript response action against a specific Elastic Agent. To do that it needs a Fleet agent ID. Fleet agent IDs are associated with hostnames, not with Okta emails. The bridge between these two worlds is the Elastic Entity Store.
-
-### What the Entity Store Is
-
-The Entity Store is a built-in feature of Elastic Security 9.x. It runs continuously in the background, ingesting identity signals from every integrated data source and maintaining a live entity graph keyed on user identities. Each entity record correlates fields from multiple sources against the same identity — Okta logon records, Active Directory attributes, Windows Security events, cloud provider IAM logs.
-
-For this demo the relevant population path is:
-
-1. The Windows System integration collects Windows Security event **4624** (interactive logon) from the VM.
-2. The ingest pipeline maps the logon subject to `user.name` and the machine name to `host.name`.
-3. The entity store ingests this record and creates (or updates) an entity for `jsmith`, storing `host.name: DEMO-VM-01`.
-
-The entity store v2 index (`/.entities.v2.latest.security_default-00001`) holds one record per entity, always reflecting the most recent state. No polling, no manual join — the correlation is continuous.
-
-### How the Workflow Uses It
-
-Workflow step 6 (`find_user_entity`) issues a POST to the entity store index via the Kibana console proxy:
-
-```yaml
-- name: find_user_entity
-  type: kibana.request
-  with:
-    method: POST
-    path: '/api/console/proxy?path=%2F.entities.v2.latest.security_default-00001%2F_search&method=POST'
-    body:
-      size: 1
-      _source:
-        - host.name
-        - entity.name
-      query:
-        bool:
-          must:
-            - term:
-                user.name: "{{ event.alerts[0].okta.actor.alternate_id | split: '@' | first }}"
-            - exists:
-                field: host.name
-```
-
-The Liquid expression `| split: '@' | first` strips the domain from the Okta actor email: `jsmith@example.com` → `jsmith`. The query returns the entity record for that local username that has a `host.name` populated — meaning this is a user who has logged into a Windows host that Elastic has telemetry on.
-
-The response lands in `steps.find_user_entity.output.hits.hits[0]._source.host.name`. Step 6b (`find_agent`) takes that hostname and resolves the Fleet agent ID:
-
-```yaml
-- name: find_agent
-  type: kibana.request
-  with:
-    method: GET
-    path: '/api/fleet/agents?perPage=1&kuery=local_metadata.host.hostname%3A%22{{ steps.find_user_entity.output.hits.hits[0]._source.host.name }}%22%20AND%20status%3Aonline'
-```
-
-The result is `steps.find_agent.output.items[0].id` — the Fleet agent UUID passed to the `run_script` action in step 7.
-
-### Why This Matters for the Demo Story
-
-This is a two-sentence explanation that lands well with security practitioners:
-
-*"The alert came from Okta. The remediation runs on Windows. The entity store is what connected them — automatically, from the data that was already flowing into Elastic."*
-
-It demonstrates that cross-domain automated response does not require custom integration work or hardcoded infrastructure assumptions. The entity correlation that makes it possible is a side effect of having the Okta integration and the Windows System integration both running — nothing extra was configured for this workflow to work.
-
----
-
-## 5. The Workflow
+## 4. The Workflow
 
 ### Overview
 
@@ -432,10 +363,8 @@ during the demo's live authoring step. It fires once per alert — the full sequ
 
 The Workflow uses three step types:
 - `cases.*` — native Cases API operations (no HTTP knowledge required)
-- `kibana.request` — raw HTTP to any Kibana API endpoint, including the Entity Store query (steps 6–6b) and the Runscript action (step 7)
+- `kibana.request` — raw HTTP to any Kibana API endpoint, including the Fleet agent lookup (step 6) and the Runscript action (step 7)
 - `ai.prompt` — sends a prompt to a configured AI connector and returns the response
-
-Steps 6 and 6b are the identity-to-endpoint bridge described in section 4. They resolve the hostname from the entity store before Fleet is queried for the agent ID.
 
 Variable interpolation uses Liquid template syntax: `{{ expression }}`. Fields from the
 triggering alert are available as `event.alerts[0].<field>`. Outputs from previous steps
@@ -575,49 +504,16 @@ steps:
       # steps.ai_analysis.output.content holds the model's text response.
 
   # ---------------------------------------------------------------------------
-  # STEP 6 — Resolve which endpoint the compromised user is associated with
-  #           via the Elastic Entity Store
-  # ---------------------------------------------------------------------------
-  - name: find_user_entity
-    type: kibana.request
-    with:
-      method: POST
-      path: '/api/console/proxy?path=%2F.entities.v2.latest.security_default-00001%2F_search&method=POST'
-      body:
-        size: 1
-        _source:
-          - host.name
-          - entity.name
-        query:
-          bool:
-            must:
-              - term:
-                  user.name: "{{ event.alerts[0].okta.actor.alternate_id | split: '@' | first }}"
-              - exists:
-                  field: host.name
-      # The entity store v2 index is auto-initialised by Elastic Security 9.x.
-      # It correlates identities across data sources. Here it maps the Okta actor
-      # email (jsmith@example.com → jsmith) to the Windows host that user last
-      # interactively logged into, populated via Windows Security event 4624.
-      #
-      # | split: '@' | first is Liquid for "strip the domain from the email address".
-      #
-      # The response is available as steps.find_user_entity.output.
-      # steps.find_user_entity.output.hits.hits[0]._source.host.name is the hostname.
-
-  # ---------------------------------------------------------------------------
-  # STEP 6b — Resolve the Fleet agent ID for the host from the entity store
+  # STEP 6 — Resolve the Fleet agent ID for the enrolled Windows endpoint
   # ---------------------------------------------------------------------------
   - name: find_agent
     type: kibana.request
     with:
       method: GET
-      path: '/api/fleet/agents?perPage=1&kuery=local_metadata.host.hostname%3A%22{{ steps.find_user_entity.output.hits.hits[0]._source.host.name }}%22%20AND%20status%3Aonline'
-      # Uses the hostname resolved in step 6 to look up the specific Fleet agent
-      # rather than blindly picking the first Windows agent. The hostname is
-      # URL-encoded in the kuery parameter (%3A = :, %22 = ").
-      #
-      # steps.find_agent.output.items[0].id is the agent UUID needed for run_script.
+      path: '/api/fleet/agents?perPage=1&kuery=status%3Aonline'
+      # Finds the first online Fleet agent. In this demo there is one enrolled
+      # endpoint. steps.find_agent.output.items[0].id is the agent UUID needed
+      # for the run_script action.
 
   # ---------------------------------------------------------------------------
   # STEP 7 — Run the remediation script against the resolved endpoint
@@ -635,8 +531,7 @@ steps:
         agent_type: endpoint
         endpoint_ids:
           - "{{ steps.find_agent.output.items[0].id }}"
-          # The Fleet agent UUID from step 6. The Elastic Agent on the VM
-          # receives this and queues the script for execution.
+          # The Fleet agent UUID from step 6.
         parameters:
           scriptId: "{{ inputs.script_id }}"
           # inputs.script_id resolves to the Script Library UUID that was
@@ -657,7 +552,7 @@ steps:
       comment: |
         ## Automated Remediation Complete
 
-        `remediate-okta-compromise.ps1` ran against `{{ steps.find_user_entity.output.hits.hits[0]._source.host.name | default: 'unknown host' }}`:
+        `remediate-okta-compromise.ps1` ran against the enrolled Windows endpoint:
 
         - Blocked `{{ event.alerts[0].okta.client.ip }}` at the Windows Firewall
         - Disabled local account `{{ event.alerts[0].okta.actor.alternate_id | split: '@' | first }}`
@@ -684,7 +579,7 @@ steps:
 
 ---
 
-## 6. The Runscript
+## 5. The Runscript
 
 ### How the Script Library Works
 
@@ -840,7 +735,7 @@ Get-LocalUser -Name jsmith | Select-Object Name, Enabled
 
 ---
 
-## 7. SA Talking Points
+## 6. SA Talking Points
 
 ### Before the Demo
 
@@ -909,26 +804,9 @@ After saving the rule, navigate to Security → Alerts. The jsmith alert should 
 "Every field in this alert was computed by the ES|QL rule. The analyst doesn't need to pivot to
 Okta to understand what happened — the full attack chain is summarised in a single alert."
 
-**Pause here and ask the audience:** *"We know who was compromised and where the attack came from.
-But which machine needs remediation? Okta doesn't know about Windows hosts. How does Elastic
-know where to run the response script?"*
+**Pause here, then navigate to Cases to show the automated response.**
 
-Let the question land, then go to Cases.
-
-### Act 3 — The Entity Store Answers "Which Machine?"
-
-Before walking the case timeline, explain what happened in the background:
-
-"While Elastic was collecting Windows logon events from the VM, the entity store was correlating
-those records to the Okta identity. It knows that `jsmith` — the local account name derived from
-`jsmith@example.com` — last interactively logged into this specific Windows host. The Workflow
-queried that graph to get the hostname, then looked up the Fleet agent for that host. That's how
-it knows exactly where to run the script — not guessing, not hardcoded."
-
-One-sentence version if you want to keep it tight: *"The alert came from Okta. The remediation
-runs on Windows. The entity store connected them."*
-
-### Act 4 — The Case (Workflow)
+### Act 3 — The Case (Workflow)
 
 Navigate to Security → Cases. The Workflow ran automatically when the alert fired. Walk the
 case timeline from top to bottom:
@@ -939,12 +817,10 @@ case timeline from top to bottom:
 4. **Observables** — the attacker IP and compromised email appear as IOCs in the case header.
 5. **AI Analysis comment** — Claude's summary of the four-stage attack chain and recommended
    next steps.
-6. **Entity store resolved the hostname** — Workflow step 6 queried the entity graph and got
-   `DEMO-VM-01`. This is the answer to the question you asked in Act 2.
-7. **Fleet agent ID resolved** — step 6b looked up the agent for that hostname.
-8. **Automated Remediation Complete comment** — names the host, the blocked IP, and the
-   disabled account. The script output is embedded.
-9. **Status: closed** — the full lifecycle completed automatically.
+6. **Fleet agent ID resolved** — Workflow step 6 looked up the first online Fleet agent.
+7. **Automated Remediation Complete comment** — the blocked IP and the disabled account.
+   The script output is embedded.
+8. **Status: closed** — the full lifecycle completed automatically.
 
 "This is ten automated steps in under 30 seconds. A human analyst would have spent 15-20 minutes
 doing this manually: opening a ticket, noting the IOCs, pivoting to Fleet to find the right
@@ -953,7 +829,7 @@ does it all and leaves a complete audit trail."
 
 ---
 
-## 8. Q&A
+## 7. Q&A
 
 ### Detection and ES|QL
 
@@ -1000,14 +876,7 @@ the rule's field references would not resolve.
 
 **Q: How does the Workflow know which endpoint to run the script on?**
 
-It uses the Elastic Entity Store — a built-in feature of Elastic Security 9.x that correlates
-identities across data sources. The `find_user_entity` step queries the entity store v2 index
-for the Windows host associated with the Okta actor's username (derived by stripping the domain
-from the email address). The entity store populates the `host.name` field once the Windows System
-integration has collected interactive logon events (Windows Security event 4624) for that user.
-A second step (`find_agent`) then looks up the Fleet agent ID for that specific hostname. This
-avoids the naive approach of picking the first Windows agent and instead pinpoints the exact
-endpoint the identity was active on.
+The `find_agent` step queries the Fleet API for the first online agent (`/api/fleet/agents?perPage=1&kuery=status:online`). In this demo there is one enrolled Windows endpoint, so it always resolves correctly. In a production deployment with multiple endpoints, you would add a more specific kuery — filtering by hostname or policy — to target the right machine.
 
 **Q: What if the Windows agent is offline when the Workflow runs?**
 

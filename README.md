@@ -1,6 +1,6 @@
 # Elastic Security 9.4 Webinar Demo
 
-Self-contained demo of automated detection-to-response: a detection rule fires on Okta credential stuffing telemetry, the Entity Store resolves which endpoint the compromised user last logged into, and a Workflow automatically opens a case, runs a remediation script via Runscript, and closes the case — all without human intervention.
+Self-contained demo of automated detection-to-response: a detection rule fires on Okta credential stuffing telemetry, and a Workflow automatically opens a case, runs a remediation script via Runscript, and closes the case — all without human intervention.
 
 ## The threat
 
@@ -15,7 +15,6 @@ MITRE: T1110.004 (Credential Stuffing), T1078 (Valid Accounts), T1098 (Account M
 | Agenda item | Feature |
 |---|---|
 | High-fidelity threat detection | **ES\|QL aggregation rule** detecting the full four-stage Okta credential stuffing chain — fires only when all stages are present for the same user and IP |
-| Identity-to-endpoint correlation | **Entity Store** — correlates Okta identities to Windows hosts via interactive logon records (Windows Security event 4624), enabling the Workflow to target the exact endpoint rather than guessing |
 | Automated response & case management | **Workflows**, launched from an alert, combining a **Runscript** response action + centralized **Script library** (Elastic Defend, GA 9.4) to block the `source.ip` and disable accounts, with **Cases** action steps to triage and document the incident |
 
 ## Setup
@@ -93,30 +92,21 @@ If SSH or RDP hangs on connect, your public IP has likely changed since the NSG 
 
 Navigate to Security → Alerts. The rule fires immediately on the seeded data — show the alert for `jsmith@example.com`. Walk the aggregation fields (`failed_logins`, `mfa_failures`, `successful_logins`, `post_compromise_events`) to show why this user/IP triggered and the others did not.
 
-The alert tells you the compromised identity and the attacker IP. Ask the audience: *which machine needs remediation?* Okta doesn't know about Windows hosts. That's the gap the Entity Store bridges — see the next section before walking the case.
-
-### The identity-to-endpoint bridge
-
-The alert carries two key facts: the compromised identity (`jsmith@example.com`) and the attacker IP. But Okta has no knowledge of Windows hosts — the alert alone cannot tell you which machine needs remediation.
-
-The Elastic Entity Store answers that question. It runs continuously in the background, correlating identities across data sources. When the Windows System integration collected interactive logon events (Windows Security event 4624), the entity store recorded that `jsmith` last authenticated on `DEMO-VM-01`. Workflow step 6 (`find_user_entity`) queries the entity store v2 index, strips the domain from the Okta actor email to get the local username, and retrieves the associated hostname. Step 6b (`find_agent`) then resolves the Fleet agent ID for that specific host. The remediation script fires against the exact right machine — not the first Windows agent in Fleet, not a hardcoded hostname, but the one the entity store identified as `jsmith`'s endpoint.
-
 ### Step 2: Respond — show the auto-created case
 
-Open Security → Cases. The Workflow fired when the alert was created and ran nine automated steps:
+Open Security → Cases. The Workflow fired when the alert was created and ran eight automated steps:
 
 1. Opened a case — title, description, severity Critical, MITRE tags.
 2. Set status → **in-progress** — signals remediation is underway.
 3. Attached the triggering alert to the case.
 4. Pinned the attacker IP and compromised account as **observables** (IOCs visible in the case header).
 5. Added an **AI analysis comment** (Claude-generated summary of the four-stage attack chain).
-6. Queried the **Entity Store** to resolve which Windows host `jsmith` last authenticated on — this is the identity-to-endpoint bridge described above.
-7. Looked up the Fleet agent ID for that hostname (step 6b).
-8. Ran `remediate-okta-compromise.ps1` via Runscript against that endpoint — blocked `source.ip` at the Windows Firewall and disabled the local account matching the compromised Okta username.
-9. Added a remediation summary comment (includes the resolved hostname).
-10. Closed the case.
+6. Located the enrolled Windows endpoint via Fleet (first online agent).
+7. Ran `remediate-okta-compromise.ps1` via Runscript against that endpoint — blocked `source.ip` at the Windows Firewall and disabled the local account matching the compromised Okta username.
+8. Added a remediation summary comment.
+9. Closed the case.
 
-Walk the case timeline: created → in-progress → observables → AI analysis → entity store resolves hostname → remediation → closed. Step 6 is the moment to pause and explain how Elastic knew which endpoint to target — the entity store correlated the Okta identity to the Windows host before the Workflow ever ran.
+Walk the case timeline: created → in-progress → observables → AI analysis → remediation → closed.
 
 #### Verifying the Runscript actually ran
 
@@ -134,7 +124,7 @@ Get-LocalUser -Name jsmith | Select-Object Name, Enabled
 
 The first command shows the exact attacker IP embedded in the rule, proving the dynamic value was passed correctly from the alert. A matching IP and `Enabled: False` on the account confirm the script ran end-to-end.
 
-> **If Response Actions History is empty:** check that the Elastic Agent on the Windows VM is showing as **Online** in Fleet (Security → Fleet → Agents). If the agent is offline or unhealthy, the Runscript action queues but cannot execute. The remediation comment in the case will still show the hostname if the Fleet lookup succeeded.
+> **If Response Actions History is empty:** check that the Elastic Agent on the Windows VM is showing as **Online** in Fleet (Security → Fleet → Agents). If the agent is offline or unhealthy, the Runscript action queues but cannot execute.
 
 ## Optional: building a richer alert queue
 
