@@ -38,7 +38,7 @@ terraform -chdir=terraform apply
 - Provisions the Azure Windows VM, VNet, NSG, public IP
 - Installs and enrolls the Elastic Agent on the VM
 - Creates the **case-writer** Agent Builder agent (`terraform/agents/case-writer.json`, ID saved to `state/case-writer-agent-id`) and deploys the **Okta Credential Stuffing Response** workflow to Kibana
-- Runs `scripts/configure.sh` — writes `shared/env.json`, creates the endpoint response-actions data stream, installs the Okta Fleet integration, waits for the agent to show healthy in Fleet, uploads `scripts/remediate-okta-compromise.ps1` to the Script library (saving its UUID to `state/script-id`), and updates the deployed Workflow with that UUID so the `script_id` input is pre-filled
+- Runs `scripts/configure.sh` — writes `shared/env.json`, creates the endpoint response-actions data stream, installs the Okta Fleet integration, waits for the agent to show healthy in Fleet, uploads `scripts/remediate-okta-compromise.ps1` to the Script library (saving its UUID to `state/script-id`), and updates the deployed Workflow with that UUID so the `script_id` const is pre-filled
 
 ### After first provisioning (one-time)
 
