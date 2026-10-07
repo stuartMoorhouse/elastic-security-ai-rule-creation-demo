@@ -305,6 +305,27 @@ if [[ "$(jq -r '.errors' <<<"${BENIGN_RESPONSE}" 2>/dev/null || echo true)" != "
 fi
 log "Indexed 2 events for ${BENIGN_IP}."
 
+step "Enabling detection rule"
+
+RULE_LOOKUP="$(curl -s -u "${ES_USER}:${ES_PASSWORD}" -H 'kbn-xsrf: true' \
+    "${KIBANA_URL%/}/api/detection_engine/rules?rule_id=okta-credential-stuffing")"
+RULE_UUID="$(jq -r '.id // empty' <<<"${RULE_LOOKUP}" 2>/dev/null || true)"
+if [[ -z "${RULE_UUID}" ]]; then
+    err "Detection rule not found. Run ./scripts/create-detection-rule.sh first."
+    exit 1
+fi
+ENABLE_RESP="$(curl -s -u "${ES_USER}:${ES_PASSWORD}" -H 'kbn-xsrf: true' \
+    -H 'Content-Type: application/json' -X POST \
+    "${KIBANA_URL%/}/api/detection_engine/rules/_bulk_action" \
+    -d "{\"action\":\"enable\",\"ids\":[\"${RULE_UUID}\"]}")"
+if [[ "$(jq -r '.success // false' <<<"${ENABLE_RESP}" 2>/dev/null)" != "true" ]]; then
+    err "Failed to enable detection rule. Response:"
+    err "${ENABLE_RESP}"
+    exit 1
+fi
+log "Rule ${RULE_UUID} enabled; it will run immediately."
+log "Alerts: ${KIBANA_URL%/}/app/security/alerts"
+
 step "Done"
 log "Seed data loaded into ${DATA_STREAM}:"
 log "  ${ATTACKER_IP} / jsmith@example.com -> failed_logins=5, mfa_failures=2, successful_logins=1, post_compromise=1  (FIRES rule)"

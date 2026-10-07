@@ -3,7 +3,8 @@
 # create-detection-rule.sh
 #
 # Creates the Okta credential stuffing ES|QL detection rule with alert
-# suppression, then re-deploys the workflow with the script_id substituted.
+# suppression (created DISABLED; seed-okta-attack-data.sh enables it once the
+# data is loaded), then re-deploys the workflow with the script_id substituted.
 #
 # Idempotent: if the rule already exists, skips creation but still
 # re-deploys the workflow (safe to re-run after a workflow redeployment).
@@ -46,6 +47,18 @@ RULE_UUID="$(jq -r '.id // empty' <<<"${EXISTING_RESP}" 2>/dev/null || true)"
 
 if [[ -n "${RULE_UUID}" && "${RULE_UUID}" != "null" ]]; then
     log "Detection rule already exists (id: ${RULE_UUID}) — skipping creation."
+    # Keep the lookback in sync with the create path (short window so seed data
+    # ages out instead of re-matching for 24h). PATCH leaves enabled state and
+    # rule actions untouched.
+    PATCH_RESP="$(curl -s -X PATCH "${KIBANA_URL%/}/api/detection_engine/rules" \
+        -u "${U}:${P}" -H 'kbn-xsrf: true' -H 'Content-Type: application/json' \
+        -d "$(jq -n --arg id "${RULE_UUID}" '{id: $id, from: "now-15m", interval: "1m"}')")"
+    if [[ "$(jq -r '.from // empty' <<<"${PATCH_RESP}" 2>/dev/null)" != "now-15m" ]]; then
+        err "Failed to update rule lookback. Response:"
+        jq . <<<"${PATCH_RESP}" >&2 || echo "${PATCH_RESP}" >&2
+        exit 1
+    fi
+    log "Rule lookback set to now-15m."
 else
     if [[ ! -f "${ESQL_FILE}" ]]; then
         err "ES|QL query file not found: ${ESQL_FILE}"
@@ -73,8 +86,8 @@ else
                 severity: "high",
                 query: $query,
                 interval: "1m",
-                from: "now-24h",
-                enabled: true,
+                from: "now-15m",
+                enabled: false,
                 tags: ["Okta", "Credential Stuffing", "T1110.004", "T1078", "T1098", "Demo"],
                 alert_suppression: {
                     group_by: ["okta.actor.alternate_id", "okta.client.ip"],

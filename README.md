@@ -46,19 +46,19 @@ terraform -chdir=terraform apply
 ./scripts/configure.sh
 ```
 
-`configure.sh` creates the detection rule and automatically binds the **Okta Credential Stuffing Response** workflow to it by injecting the rule UUID into the workflow trigger. No manual Kibana steps required.
+`configure.sh` creates the detection rule (saving its UUID to `state/rule-id`). It does **not** attach the workflow: attempts to automate this (injecting the rule ID into the workflow trigger) failed because the workflow engine strips the field, so attaching is a manual step. In Kibana, open the rule, add the **Okta Credential Stuffing Response** workflow as a rule action, and use the IDs from `state/workflow-id` and `state/script-id`. The action is preserved across resets.
 
 ### Before each demo take (including the first)
 
 ```bash
-# 1. Reset — clears alerts, cases, Okta telemetry, failed workflow runs, and the endpoint
+# 1. Reset — clears alerts, cases, Okta telemetry, previous workflow runs, and the endpoint
 ./scripts/prepare-and-reset-demo.sh
 
 # 2. When ready to fire the rule, seed the attack data
 ./scripts/seed-okta-attack-data.sh
 ```
 
-`prepare-and-reset-demo.sh` clears the previous take's state and ensures the detection rule exists. It does **not** seed new data — that is a separate step so you can attach the workflow to the rule in Kibana between reset and trigger if needed. The rule and its workflow action are preserved across resets.
+`prepare-and-reset-demo.sh` clears the previous take's state and ensures the detection rule exists but is disabled. The seed script enables it after loading the data, so it never runs against an empty index and the alert appears within seconds. It does **not** seed new data — that is a separate step so you can attach the workflow to the rule in Kibana between reset and trigger if needed (required on first setup). The rule and its workflow action are preserved across resets.
 
 ## Connecting to the VM
 

@@ -3,8 +3,8 @@
 # prepare-and-reset-demo.sh
 #
 # Resets demo state between takes. Clears alerts, cases, Okta telemetry, and
-# failed workflow runs; resets the Windows endpoint; and ensures the detection
-# rule exists. Does NOT seed new Okta data — run seed-okta-attack-data.sh
+# previous workflow runs; resets the Windows endpoint; and ensures the detection
+# rule exists (disabled). Does NOT seed new Okta data — run seed-okta-attack-data.sh
 # separately when you are ready to trigger the rule.
 #
 # Idempotent: safe to re-run, and safe to run when there is nothing to reset.
@@ -71,6 +71,24 @@ kibana_get() {
     local path="$1"
     curl -s -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" -H 'kbn-xsrf: true' "${KIBANA_URL%/}${path}"
 }
+
+# --------------------------------------------------------------------------
+# 0b. Disable the detection rule
+#
+# The rule stays off until seed-okta-attack-data.sh loads the data and enables
+# it, so it never runs against an empty/half-cleared index.
+# --------------------------------------------------------------------------
+step "Disabling detection rule"
+
+RULE_LOOKUP="$(kibana_get "/api/detection_engine/rules?rule_id=okta-credential-stuffing")"
+EXISTING_RULE_UUID="$(jq -r '.id // empty' <<<"${RULE_LOOKUP}" 2>/dev/null || true)"
+if [[ -n "${EXISTING_RULE_UUID}" ]]; then
+    kibana_post "/api/detection_engine/rules/_bulk_action" \
+        "{\"action\":\"disable\",\"ids\":[\"${EXISTING_RULE_UUID}\"]}" >/dev/null
+    log "Rule ${EXISTING_RULE_UUID} disabled."
+else
+    log "Rule not created yet (it will be created disabled below)."
+fi
 
 # --------------------------------------------------------------------------
 # 1. Delete all alerts from the previous take
@@ -196,14 +214,14 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 6. Delete failed workflow runs
+# 6. Delete previous workflow runs
 #
 # The Kibana Workflows API has no delete endpoint for executions, so we
-# write directly to the backing Elasticsearch indices. We collect failed
+# write directly to the backing Elasticsearch indices. We collect finished
 # execution IDs, delete their step-level records first, then the parent
-# execution documents. Completed runs are left intact.
+# execution documents. In-flight runs (running/pending/waiting) are left intact.
 # --------------------------------------------------------------------------
-step "Deleting failed workflow run history"
+step "Deleting previous workflow run history"
 
 # .workflows-executions is a restricted index — even the elastic superuser
 # cannot delete from it without allow_restricted_indices: true. configure.sh
@@ -214,34 +232,34 @@ if [[ -z "${DEMO_RESET_PASSWORD}" ]]; then
 else
     RESET_CREDS="demo_reset_user:${DEMO_RESET_PASSWORD}"
 
-    # Collect all failed execution IDs (up to 1000).
-    FAILED_EXEC_RESP="$(curl -s -u "${RESET_CREDS}" \
+    # Collect all finished execution IDs (up to 1000).
+    EXEC_LIST_RESP="$(curl -s -u "${RESET_CREDS}" \
         -H 'Content-Type: application/json' \
         -X POST "${ELASTICSEARCH_URL%/}/.workflows-executions/_search" \
-        -d '{"size":1000,"_source":["id"],"query":{"term":{"status":"failed"}}}')"
-    FAILED_IDS="$(jq -r '[.hits.hits[]._source.id] | @json' <<<"${FAILED_EXEC_RESP}" 2>/dev/null || echo '[]')"
-    FAILED_COUNT="$(jq -r 'length' <<<"${FAILED_IDS}")"
+        -d '{"size":1000,"_source":["id"],"query":{"bool":{"must_not":[{"terms":{"status":["running","pending","waiting"]}}]}}}')"
+    EXEC_IDS="$(jq -r '[.hits.hits[]._source.id] | @json' <<<"${EXEC_LIST_RESP}" 2>/dev/null || echo '[]')"
+    EXEC_COUNT="$(jq -r 'length' <<<"${EXEC_IDS}")"
 
-    if [[ "${FAILED_COUNT}" -eq 0 ]]; then
-        log "No failed workflow runs found (nothing to delete)."
+    if [[ "${EXEC_COUNT}" -eq 0 ]]; then
+        log "No previous workflow runs found (nothing to delete)."
     else
-        log "Found ${FAILED_COUNT} failed run(s); deleting..."
+        log "Found ${EXEC_COUNT} previous run(s); deleting..."
 
-        # Delete step executions for those failed runs.
+        # Delete step executions for those runs.
         STEPS_RESP="$(curl -s -u "${RESET_CREDS}" \
             -H 'Content-Type: application/json' \
             -X POST "${ELASTICSEARCH_URL%/}/.workflows-step-executions/_delete_by_query?refresh=true&conflicts=proceed" \
-            -d "{\"query\":{\"terms\":{\"executionId\":${FAILED_IDS}}}}")"
+            -d "{\"query\":{\"terms\":{\"executionId\":${EXEC_IDS}}}}")"
         STEPS_DELETED="$(jq -r '.deleted // 0' <<<"${STEPS_RESP}" 2>/dev/null || echo 0)"
 
         # Delete the parent execution records.
         EXEC_RESP="$(curl -s -u "${RESET_CREDS}" \
             -H 'Content-Type: application/json' \
             -X POST "${ELASTICSEARCH_URL%/}/.workflows-executions/_delete_by_query?refresh=true&conflicts=proceed" \
-            -d '{"query":{"term":{"status":"failed"}}}')"
+            -d "{\"query\":{\"terms\":{\"id\":${EXEC_IDS}}}}")"
         EXEC_DELETED="$(jq -r '.deleted // 0' <<<"${EXEC_RESP}" 2>/dev/null || echo 0)"
 
-        log "Deleted ${EXEC_DELETED} failed execution(s) and ${STEPS_DELETED} step record(s)."
+        log "Deleted ${EXEC_DELETED} execution(s) and ${STEPS_DELETED} step record(s)."
     fi
 fi
 
@@ -249,9 +267,10 @@ step "Reset complete"
 
 cat <<EOF
 
-  Alerts, cases, Okta telemetry, and the detection rule have been reset.
+  Alerts, cases, and Okta telemetry have been reset; the detection rule is
+  disabled until the seed script enables it.
   The Windows endpoint firewall rule and jsmith account have been restored.
-  Failed workflow runs have been removed from the execution history.
+  Previous workflow runs have been removed from the execution history.
 
   When ready to trigger the demo:
     ./scripts/seed-okta-attack-data.sh
