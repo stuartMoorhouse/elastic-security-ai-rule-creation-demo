@@ -19,6 +19,8 @@ resource "terraform_data" "workflow" {
     password   = ec_deployment.main.elasticsearch_password
     # Change this hash to force re-deploy when the workflow YAML changes.
     workflow_hash = filemd5("${path.module}/workflows/okta-credential-stuffing.yaml")
+    # Likewise for the case-writer agent definition the workflow calls.
+    agent_hash = filemd5("${path.module}/agents/case-writer.json")
   }
 
   provisioner "local-exec" {

@@ -80,6 +80,12 @@ if [[ -f "$WORKFLOW_ID_FILE" ]]; then
 fi
 
 # =============================================================================
+# STEP 2b: Create/update the case-writer agent the workflow's ai.agent step calls
+# =============================================================================
+
+bash "${SCRIPT_DIR}/create-case-writer-agent.sh"
+
+# =============================================================================
 # STEP 3: Import the workflow (POST to create, then PUT to validate/enable)
 # =============================================================================
 
@@ -118,7 +124,7 @@ else
     VALID="$(jq -r '.valid // "?"' <<<"$PUT_RESPONSE" 2>/dev/null)"
     ERRORS="$(jq -r '.validationErrors[]? // empty' <<<"$PUT_RESPONSE" 2>/dev/null)"
 
-    if [[ "$VALID" == "True" ]]; then
+    if [[ "$VALID" == "true" || "$VALID" == "True" ]]; then
         log "Workflow is valid and enabled."
     else
         warn "Workflow validation errors:"

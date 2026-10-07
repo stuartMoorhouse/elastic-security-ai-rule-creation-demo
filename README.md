@@ -1,4 +1,4 @@
-# Elastic Security 9.4 Webinar Demo
+# Elastic Security 9.5 Webinar Demo
 
 Self-contained demo of automated detection-to-response: a detection rule fires on Okta credential stuffing telemetry, and a Workflow automatically opens a case, runs a remediation script via Runscript, and closes the case — all without human intervention.
 
@@ -37,7 +37,7 @@ terraform -chdir=terraform apply
 - Creates the Elastic Cloud deployment (Elasticsearch + Kibana)
 - Provisions the Azure Windows VM, VNet, NSG, public IP
 - Installs and enrolls the Elastic Agent on the VM
-- Deploys the **Okta Credential Stuffing Response** workflow to Kibana
+- Creates the **case-writer** Agent Builder agent (`terraform/agents/case-writer.json`, ID saved to `state/case-writer-agent-id`) and deploys the **Okta Credential Stuffing Response** workflow to Kibana
 - Runs `scripts/configure.sh` — writes `shared/env.json`, creates the endpoint response-actions data stream, installs the Okta Fleet integration, waits for the agent to show healthy in Fleet, uploads `scripts/remediate-okta-compromise.ps1` to the Script library (saving its UUID to `state/script-id`), and updates the deployed Workflow with that UUID so the `script_id` input is pre-filled
 
 ### After first provisioning (one-time)
@@ -94,17 +94,18 @@ Navigate to Security → Alerts. The rule fires immediately on the seeded data �
 
 ### Step 2: Respond — show the auto-created case
 
-Open Security → Cases. The Workflow fired when the alert was created and ran eight automated steps:
+Open Security → Cases. The Workflow fired when the alert was created and ran these automated steps:
 
-1. Opened a case — title, description, severity Critical, MITRE tags.
-2. Set status → **in-progress** — signals remediation is underway.
-3. Attached the triggering alert to the case.
-4. Pinned the attacker IP and compromised account as **observables** (IOCs visible in the case header).
-5. Added an **AI analysis comment** (Claude-generated summary of the four-stage attack chain).
-6. Located the enrolled Windows endpoint via Fleet (first online agent).
-7. Ran `remediate-okta-compromise.ps1` via Runscript against that endpoint — blocked `source.ip` at the Windows Firewall and disabled the local account matching the compromised Okta username.
-8. Added a remediation summary comment.
-9. Closed the case.
+1. The **case-writer** Agent Builder agent (an `ai.agent` step) received the alert and, using its Cases tools, did all of the following:
+   - Opened the case with a title, description, severity Critical and MITRE tags.
+   - Set the status to **in-progress**, signalling that remediation is underway.
+   - Attached the triggering alert.
+   - Pinned the attacker IP and compromised account as **observables** (IOCs visible in the case header).
+   - Added an **AI analysis comment** summarising the four-stage attack chain.
+2. Located the enrolled Windows endpoint via Fleet (first online agent).
+3. Ran `remediate-okta-compromise.ps1` via Runscript against that endpoint — blocked `source.ip` at the Windows Firewall and disabled the local account matching the compromised Okta username.
+4. Added a remediation summary comment.
+5. Closed the case.
 
 Walk the case timeline: created → in-progress → observables → AI analysis → remediation → closed.
 

@@ -1,10 +1,10 @@
 # Elastic Cloud (ECH) deployment — hot tier only, small size.
 #
-# The stack version is resolved to the latest 9.4.x patch via the ec_stack
+# The stack version is resolved to the latest 9.5.x patch via the ec_stack
 # data source rather than hardcoded, per project convention.
 
 data "ec_stack" "latest" {
-  version_regex = "^9\\.4\\."
+  version_regex = "^9\\.5\\."
   region        = var.ec_region
 }
 
